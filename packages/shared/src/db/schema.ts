@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   pgEnum,
@@ -159,7 +160,7 @@ export const advertisers = pgTable(
     passwordHash: text("password_hash").notNull(),
     companyName: text("company_name").notNull(),
     website: text("website"),
-    balanceMicro: bigint("balance_micro", { mode: "bigint" }).notNull().default(0n),
+    balanceMicro: bigint("balance_micro", { mode: "bigint" }).notNull().default(sql`0`),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex("advertisers_email_uidx").on(t.email)],
@@ -191,8 +192,8 @@ export const campaigns = pgTable(
     moderatedAt: timestamp("moderated_at", { withTimezone: true }),
     maxPerDayPerUser: integer("max_per_day_per_user").notNull().default(3),
     cooldownSec: integer("cooldown_sec").notNull().default(1800),
-    spentTodayMicro: bigint("spent_today_micro", { mode: "bigint" }).notNull().default(0n),
-    spentTotalMicro: bigint("spent_total_micro", { mode: "bigint" }).notNull().default(0n),
+    spentTodayMicro: bigint("spent_today_micro", { mode: "bigint" }).notNull().default(sql`0`),
+    spentTotalMicro: bigint("spent_total_micro", { mode: "bigint" }).notNull().default(sql`0`),
     spendDate: text("spend_date").notNull().default(""), // YYYY-MM-DD of spentTodayMicro
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -247,8 +248,8 @@ export const referrals = pgTable(
     /** Verified-view earnings the referred user had when last evaluated. */
     qualifiedEarningsMicro: bigint("qualified_earnings_micro", { mode: "bigint" })
       .notNull()
-      .default(0n),
-    bonusMicro: bigint("bonus_micro", { mode: "bigint" }).notNull().default(500_000n),
+      .default(sql`0`),
+    bonusMicro: bigint("bonus_micro", { mode: "bigint" }).notNull().default(sql`500000`),
     paidAt: timestamp("paid_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -332,7 +333,7 @@ export const impressions = pgTable(
     /** Coarse geo cluster resolved server-side from the client IP. Never a raw IP. */
     geoCluster: text("geo_cluster"),
     earned: boolean("earned").notNull(),
-    earnedMicro: bigint("earned_micro", { mode: "bigint" }).notNull().default(0n),
+    earnedMicro: bigint("earned_micro", { mode: "bigint" }).notNull().default(sql`0`),
     status: impressionStatusEnum("status").notNull(),
     rejectionReasons: jsonb("rejection_reasons").$type<string[]>().notNull().default([]),
     pohi: jsonb("pohi").notNull(),
@@ -379,7 +380,7 @@ export const socialTasks = pgTable(
     postUrl: text("post_url").notNull(),
     screenshotKey: text("screenshot_key").notNull(),
     status: taskStatusEnum("status").notNull().default("pending"),
-    rewardMicro: bigint("reward_micro", { mode: "bigint" }).notNull().default(100_000n),
+    rewardMicro: bigint("reward_micro", { mode: "bigint" }).notNull().default(sql`100000`),
     /** Laya auto-moderation outcome for the submitted proof. */
     moderationDecision: moderationDecisionEnum("moderation_decision"),
     moderationScore: integer("moderation_score"),

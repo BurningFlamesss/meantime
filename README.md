@@ -17,20 +17,21 @@ prompt and the AI's response — with 55% of ad spend going to the user.
 ```bash
 pnpm install
 
-# 1. Database + migrations
-docker compose up -d            # postgres + redis (see docker-compose.yml)
-pnpm db:generate
+# 1. Local infrastructure: postgres, redis, minio (+ bucket), moderation stub
+docker compose up -d
+
+# 2. API environment + database (migrations are committed under apps/api/drizzle)
+cp apps/api/.env.example apps/api/.env
 pnpm db:migrate
 pnpm db:seed
 
-# 2. API
-cd apps/api && cp .env.example .env
+# 3. API (loads apps/api/.env automatically)
 pnpm --filter @meantime/api dev
 
-# 3. Web app
+# 4. Web app
 pnpm --filter @meantime/web dev
 
-# 4. Extension (loads into Chrome via chrome://extensions -> Load unpacked -> apps/extension/.output/chrome-mv3)
+# 5. Extension (loads into Chrome via chrome://extensions -> Load unpacked -> apps/extension/.output/chrome-mv3)
 pnpm --filter @meantime/extension build
 ```
 
@@ -89,7 +90,8 @@ Campaigns and social-task proofs are moderated by [Laya](#), an open-source,
 non-chat AI that runs in Docker as a local sidecar (`laya` service in
 `docker-compose.yml`). Because it's non-chat, it takes structured input and
 returns a score and labels rather than free text — nothing is sent to a
-third-party API.
+third-party API. The local `infra/laya-stub` is a deterministic development
+stand-in, not a production classifier.
 
 The API calls `POST {LAYA_ENDPOINT}/v1/classify` with the ad copy (or the task
 proof image + URL) and blends the returned 0–100 score with lightweight
@@ -109,8 +111,10 @@ The server resolves each request's IP to a coarse geo cluster (e.g.
 `NA-EAST`, `EU-WEST`) in memory and discards the IP — impressions and click
 events store only the cluster label. Advertisers target campaigns by cluster
 and see a per-cluster breakdown (unique users, views, verified views,
-intentional hovers, clicks, average retention). **The raw IP is never stored
-in plaintext and never reaches the client.**
+intentional hovers, clicks, average retention). **The raw IP is never returned
+to the client and is not stored for impressions or clicks.** One legacy
+exception remains: `users.signup_ip` still stores the registration IP and is
+tracked for removal in `TASKS.md` (T-07).
 
 Hover is tracked only when intentional: a contiguous hover must last at least
 500ms before it accrues time, so the advertiser metric reflects real attention

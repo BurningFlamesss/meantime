@@ -84,7 +84,10 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext) {
       const match = await ctx.db
         .select({ id: users.id })
         .from(users)
-        .where(sql`encode(digest('referral:' || ${users.id}::text, 'sha256'), 'hex') LIKE ${body.referralCode.toLowerCase() + "%"}`)
+        // Core `sha256(bytea)` (Postgres 11+) avoids depending on pgcrypto.
+        .where(
+          sql`encode(sha256(convert_to('referral:' || ${users.id}::text, 'UTF8')), 'hex') LIKE ${body.referralCode.toLowerCase() + "%"}`,
+        )
         .limit(1);
       const referrer = match[0];
       if (referrer && referrer.id !== user.id) {

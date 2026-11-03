@@ -4,11 +4,26 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./db": "./src/db/index.ts",
-    "./db/*": "./src/db/*",
-    "./crypto": "./src/crypto.ts",
-    "./platforms": "./src/platforms.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./db": {
+      "types": "./dist/db/index.d.ts",
+      "default": "./dist/db/index.js"
+    },
+    "./db/*": {
+      "types": "./dist/db/*.d.ts",
+      "default": "./dist/db/*.js"
+    },
+    "./crypto": {
+      "types": "./dist/crypto.d.ts",
+      "default": "./dist/crypto.js"
+    },
+    "./platforms": {
+      "types": "./dist/platforms.d.ts",
+      "default": "./dist/platforms.js"
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

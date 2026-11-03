@@ -1,4 +1,22 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { z } from "zod";
+
+/**
+ * Load `apps/api/.env` when present. Node >=20.12 exposes
+ * `process.loadEnvFile`; on older runtimes we simply rely on the shell
+ * environment. Values already present in process.env are not overridden.
+ */
+function loadDotEnv(): void {
+  if (typeof process.loadEnvFile !== "function") return;
+  const envPath = path.resolve(process.cwd(), ".env");
+  if (!existsSync(envPath)) return;
+  try {
+    process.loadEnvFile(envPath);
+  } catch {
+    // A malformed .env should not mask the actionable validation error below.
+  }
+}
 
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
@@ -17,6 +35,7 @@ const envSchema = z.object({
 export type Env = z.infer<typeof envSchema>;
 
 export function loadEnv(): Env {
+  loadDotEnv();
   const parsed = envSchema.safeParse(process.env);
   if (!parsed.success) {
     const missing = parsed.error.issues

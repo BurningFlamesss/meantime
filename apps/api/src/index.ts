@@ -12,8 +12,32 @@ async function main(): Promise<void> {
   const env = loadEnv();
   const ctx = buildContext(env);
 
-  const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
+  const app = Fastify({
+    logger: {
+      level: process.env.LOG_LEVEL ?? "info",
+      // The raw IP is available to handlers via req.ip but must never reach
+      // logs. Authorization/cookie headers are redacted too.
+      redact: {
+        paths: [
+          "req.remoteAddress",
+          "req.remotePort",
+          "req.headers.authorization",
+          "req.headers.cookie",
+        ],
+        censor: "[redacted]",
+      },
+    },
+  });
   registerContext(app, ctx);
+
+  // Money columns are Postgres bigints. JSON has no bigint type, and the web
+  // client types these fields as decimal strings so it never loses precision,
+  // so serialize every bigint as a string instead of throwing.
+  app.setReplySerializer((payload) =>
+    JSON.stringify(payload, (_key, value) =>
+      typeof value === "bigint" ? value.toString() : value,
+    ),
+  );
 
   await app.register(cors, {
     origin: [env.WEB_ORIGIN, /chrome-extension:\/\//],

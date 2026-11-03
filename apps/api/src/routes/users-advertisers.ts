@@ -464,6 +464,17 @@ export async function advertiserRoutes(app: FastifyInstance, ctx: AppContext) {
     const auth = requireAdvertiser(req, reply, ctx.env.JWT_SECRET);
     if (!auth?.advertiserId) return;
     const { id } = req.params as { id: string };
+    const [existing] = await ctx.db
+      .select()
+      .from(campaigns)
+      .where(and(eq(campaigns.id, id), eq(campaigns.advertiserId, auth.advertiserId)))
+      .limit(1);
+    if (!existing) return reply.code(404).send({ error: "not_found" });
+    // Fail closed: an advertiser cannot self-approve content that moderation
+    // left in review or rejected. A human reviewer must clear it first.
+    if (existing.moderationDecision !== "auto_approved") {
+      return reply.code(409).send({ error: "moderation_required", decision: existing.moderationDecision });
+    }
     const [campaign] = await ctx.db
       .update(campaigns)
       .set({ status: "active", updatedAt: new Date() })

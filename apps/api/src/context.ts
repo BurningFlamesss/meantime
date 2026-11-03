@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { createDb, type Db } from "@meantime/shared/db";
-import Redis from "ioredis";
+import { Redis } from "ioredis";
 import type { Env } from "./env.js";
 
 export interface AppContext {
@@ -12,6 +12,9 @@ export interface AppContext {
 export function buildContext(env: Env): AppContext {
   const db = createDb(env.DATABASE_URL);
   const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: 2, lazyConnect: true });
+  // Redis is optional: callers fall back to the DB. Swallow connection errors
+  // so a dev run without Redis does not flood the logs with unhandled events.
+  redis.on("error", () => {});
   return { env, db, redis };
 }
 

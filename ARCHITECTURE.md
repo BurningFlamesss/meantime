@@ -1,0 +1,725 @@
+# MeanTime — Technical Architecture
+
+**Status:** Implemented (v0.1), with documented gaps  
+**Last updated:** 2026-11-03  
+**Related docs:** [PRD.md](./PRD.md) · [DESIGN-SYSTEM.md](./DESIGN-SYSTEM.md) · [AGENTS.md](./AGENTS.md) · [TASKS.md](./TASKS.md)
+
+---
+
+## 1. System overview
+
+MeanTime is a pnpm + Turborepo monorepo with four deployable workspaces and one
+shared package.
+
+```mermaid
+flowchart LR
+  subgraph Browser
+    CS["Content script<br/>adapters + trigger"]
+    W["Ad widget<br/>(closed Shadow DOM)"]
+    BG["Background service worker<br/>prefetch + cache + telemetry queue"]
+    POP["Popup<br/>settings + status"]
+    CS --> W
+    CS <--> BG
+    POP <--> BG
+  end
+
+  subgraph Edge
+    WEB["Web app<br/>TanStack Start + React 19"]
+    API["API<br/>Fastify 5"]
+  end
+
+  subgraph Data
+    PG[("PostgreSQL 16<br/>Drizzle schema")]
+    RD[("Redis 7<br/>lease replay / pacing")]
+    S3[("S3 / MinIO<br/>task proofs")]
+    LAYA["Laya classifier<br/>POST /v1/classify"]
+  end
+
+  AI["AI platforms<br/>ChatGPT · Gemini · Claude<br/>Grok · DeepSeek"]
+
+  BG -- "prefetch / telemetry / clicks" --> API
+  CS -- "reads DOM (never prompt text)" --> AI
+  WEB -- "REST + bearer token" --> API
+  API --> PG
+  API --> RD
+  API --> S3
+  API -- "moderation" --> LAYA
+  WEB -- "presigned upload" --> S3
+```
+
+### Key architectural properties
+
+- **No server-rendered secrets.** The extension holds only a scoped bearer
+  token and its own local settings.
+- **Server-authoritative money.** The client reports view time; the server
+  decides eligibility, revenue share, and ledger postings.
+- **Single-use ad leases.** Every ad impression requires an HMAC-signed lease
+  that the server consumes exactly once.
+- **Privacy boundary at the API edge.** IP → coarse geo cluster in memory; raw
+  IP is never persisted or returned.
+- **Fail-safe moderation.** Policy checks run first; an unavailable classifier
+  routes to human review, never auto-approval.
+- **Bounded client storage.** The extension cache and telemetry queue have hard
+  caps and survive service-worker suspension.
+
+---
+
+## 2. Monorepo layout
+
+| Path | Package | Responsibility |
+|---|---|---|
+| `packages/shared` | `@meantime/shared` | TypeScript contracts, zod validators, WebCrypto lease helpers, Drizzle PostgreSQL schema, platform selector configs, constants. |
+| `apps/api` | `@meantime/api` | Fastify API, auth, prefetch/lease issuance, telemetry ingestion, ledger, payouts, referrals, moderation, fraud engine, S3 presigning. |
+| `apps/web` | `@meantime/web` | TanStack Start/React app: landing, dashboard, tasks, referrals, payouts, advertiser portal. |
+| `apps/extension` | `@meantime/extension` | WXT Manifest V3 extension: background worker, content script, popup, adapters, widget, timers, local storage. |
+| `infra/laya-stub` | (dev only) | Dependency-free Node HTTP stand-in for the Laya classifier so local Docker compose works. |
+| root | — | Turbo pipeline, pnpm workspace, Drizzle config, Docker compose, docs. |
+
+### Workspace dependency graph
+
+```
+@meantime/web ─┐
+@meantime/api ─┼──> @meantime/shared
+@meantime/extension ─┘
+```
+
+`@meantime/shared` is built to `dist/` and its `exports` map points at the
+compiled output. This is required for production Node execution and for
+`pnpm start`; the Turbo `build` and `dev` tasks depend on `^build`.
+
+---
+
+## 3. Technology stack
+
+| Layer | Technology | Why |
+|---|---|---|
+| Language | TypeScript 5.x (strict, `noUncheckedIndexedAccess`) | Shared types across browser and server. |
+| Monorepo | pnpm 9 + Turborepo 2 | Fast installs, cached task graph, workspace linking. |
+| Extension | WXT 0.19, Manifest V3, `@types/chrome` | Modern MV3 build, HMR, typed `defineBackground`/`defineContentScript`. |
+| Extension UI | Vanilla DOM + closed Shadow DOM | Tiny bundle, style isolation from host pages, no framework runtime in content scripts. |
+| API | Fastify 5, `@fastify/cors`, `@fastify/compress` | Low overhead, schema-free routes, built-in structured logging. |
+| Validation | zod 3 | Runtime validation at HTTP boundaries, shared with types. |
+| ORM | Drizzle ORM 0.38 + `node-postgres` | Typed SQL, explicit schema, migration generation. |
+| Database | PostgreSQL 16 | Relational integrity, transactions, JSONB, aggregate queries. |
+| Cache | Redis 7 (`ioredis`) | Atomic `SET NX` for lease replay protection; optional pacing cache. |
+| Object storage | S3-compatible (MinIO locally) | Presigned task-proof uploads. |
+| Web | React 19, TanStack Router/Start 1.x, Vite 8, Tailwind 3 | File routes, SSR, small client bundle, utility-first styling. |
+| Web production server | `srvx` | Serves the TanStack Start server entry plus static client assets. |
+| Auth | Custom HMAC-SHA256 bearer tokens | Simple, dependency-free, symmetric; 30-day TTL for users. |
+| Ad token | HMAC-SHA256 over canonical JSON (WebCrypto) | Works identically in extension, browser, and Node. |
+| Moderation | Local HTTP classifier ("Laya") + deterministic policy | Non-chat structured output; no third-party data egress. |
+| Infra | Docker Compose: Postgres, Redis, MinIO, moderation stub | Reproducible local stack. |
+
+---
+
+## 4. Runtime topology
+
+### 4.1 Local development
+
+```mermaid
+flowchart TB
+  subgraph Host
+    WEBDEV["web :3000<br/>vite dev"]
+    APIDEV["api :3001<br/>tsx watch"]
+    EXT["extension<br/>wxt build → .output/chrome-mv3"]
+  end
+  subgraph Compose
+    PG[("postgres :5432")]
+    RD[("redis :6379")]
+    MINIO[("minio :9000/:9001")]
+    LAYA["laya-stub :8080"]
+  end
+  WEBDEV --> APIDEV
+  APIDEV --> PG
+  APIDEV --> RD
+  APIDEV --> MINIO
+  APIDEV --> LAYA
+```
+
+- Web dev server: `http://localhost:3000`
+- API: `http://localhost:3001`
+- MinIO console: `http://localhost:9001` (`minio` / `minio123`)
+- Moderation stub: `http://localhost:8080`
+- Extension output: `apps/extension/.output/chrome-mv3`
+
+### 4.2 Production-shaped local run
+
+After `pnpm build`:
+
+```bash
+# API (needs env + reachable Postgres/Redis/S3)
+pnpm --filter @meantime/api start
+
+# Web (serves SSR + static assets)
+pnpm --filter @meantime/web start
+```
+
+- API entry: `apps/api/dist/index.js`
+- Web entry: `apps/web/dist/server/server.js` with static files in
+  `apps/web/dist/client`
+- Extension: load `apps/extension/.output/chrome-mv3` unpacked in Chrome.
+
+### 4.3 Environment variables
+
+API (`apps/api/.env`, loaded automatically by `loadEnv()` when present):
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `DATABASE_URL` | yes | — | PostgreSQL connection string. |
+| `REDIS_URL` | no | `redis://localhost:6379` | Redis connection string. |
+| `LEASE_HMAC_SECRET` | yes, ≥16 chars | — | Signs ad leases. |
+| `JWT_SECRET` | yes, ≥16 chars | — | Signs bearer tokens (despite the name, not a JWT). |
+| `S3_BUCKET` | yes | — | Task-proof bucket. |
+| `S3_ENDPOINT` | yes | — | MinIO/S3 endpoint. |
+| `S3_ACCESS_KEY` / `S3_SECRET_KEY` | yes | — | Object storage credentials. |
+| `S3_REGION` | no | `us-east-1` | S3 client region. |
+| `PORT` | no | `3001` | API port. |
+| `WEB_ORIGIN` | no | `http://localhost:3000` | CORS origin and referral link base. |
+| `IP_HASH_SALT` | no | dev placeholder | Salt for IP equality hashes. **Change in production.** |
+| `LAYA_ENDPOINT` | no | `http://localhost:8080` | Moderation classifier base URL. |
+| `LAYA_ENABLED` | no | `true` | Disable to force `needs_review`. |
+| `LOG_LEVEL` | no | `info` | Fastify log level. |
+
+Extension:
+
+- API base URL is stored in `chrome.storage.local` under `api_config`
+  (`{ baseUrl }`), falling back to `https://api.meantime.example`.
+- Development host permissions allow `http://localhost:3001/*`.
+- The popup's earnings card currently calls `http://localhost:3001` directly.
+
+Web:
+
+- API base is currently hardcoded to `http://localhost:3001` in
+  `apps/web/src/lib/api.ts`. A build-time env var is a planned improvement.
+- Auth token is read from `localStorage["mt_token"]`.
+
+---
+
+## 5. Data flow
+
+### 5.1 Prefetch and lease issuance
+
+```mermaid
+sequenceDiagram
+  participant BG as Extension SW
+  participant API as Fastify API
+  participant DB as PostgreSQL
+  participant R as Redis
+
+  BG->>BG: idle / startup / cache < 5
+  BG->>API: POST /ads/prefetch {deviceId,count,platforms}
+  API->>API: requireUser → verify HMAC bearer token
+  API->>DB: count consumed leases in last hour
+  API->>API: pacingFor(promptsLastHour)
+  alt tier 3 / capped
+    API-->>BG: {ads: [], pacing}
+  else allowed
+    API->>DB: select active campaigns (bid desc)
+    API->>API: filter budget, platform, geo cluster
+    loop up to count
+      API->>DB: select approved A/B variants
+      API->>API: choose base or variant, sign lease token
+      API->>DB: insert ad_leases row
+    end
+    API-->>BG: {ads, pacing, serverTime}
+  end
+  BG->>BG: dedupe by leaseId, ring-buffer to 25, store pacing
+```
+
+Notes:
+
+- `cpiMicro` is serialized as a JS number in the prefetch response. Values are
+  small enough for v0.1 but should be stringified before bids exceed
+  `Number.MAX_SAFE_INTEGER` micro-dollars.
+- Pacing at prefetch counts *consumed leases* in the last hour. The extension
+  also enforces pacing against a local prompt counter.
+
+### 5.2 Trigger → impression → telemetry
+
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant CS as Content script
+  participant BG as Background
+  participant API as API
+  participant DB as PostgreSQL
+  participant R as Redis
+
+  U->>CS: Enter / send click
+  CS->>CS: check enabled, snooze, pacing, one-at-a-time
+  CS->>BG: take_ad
+  BG->>BG: filter expiry, per-day cap, cooldown
+  BG-->>CS: PrefetchedAd (single-use lease)
+  CS->>CS: mount widget, start viewport + hover timers
+  U->>CS: 5,000 ms active view (or AI streams first)
+  CS->>CS: finalize event, destroy widget
+  CS->>BG: queue_impression
+  BG->>BG: queue (flush at 15 items or 15 min)
+  BG->>API: POST /telemetry/batch (deflate >1 KB)
+  API->>R: SET lease:consumed:{lid} NX EX 86400
+  API->>DB: load lease row, verify not consumed
+  API->>API: PoHI, threshold, cadence checks
+  API->>DB: transaction: ledger postings + campaign spend + lease consume
+  API->>DB: insert impression + maybe vest referral
+  API-->>BG: {accepted, results[]}
+  BG->>BG: keep queue drained on success, restore on failure
+```
+
+### 5.3 View accounting
+
+The extension combines three signals into one boolean:
+
+```
+activelyViewable = intersectionRatio >= 0.75
+                && document.visibilityState === "visible"
+                && document.hasFocus()
+```
+
+It integrates `performance.now()` deltas while that boolean is true. The
+accumulated total is monotonic across pause/resume. Payout requires
+`cumulativeVisibleMs >= 5_000`.
+
+- `wait_time_only`: the ad is removed when the AI starts streaming.
+- `persist_until_5s`: the ad remains anchored after streaming starts until the
+  timer earns, then fades.
+- `earned` in the event is advisory; the server recomputes eligibility.
+
+### 5.4 Revenue and ledger flow
+
+For a verified impression with campaign bid `b` (micro-dollars):
+
+```
+userShare     = floor(b * 5500 / 10000)
+platformShare = b - userShare
+```
+
+Balanced postings in one transaction:
+
+| Entry type | From | To | Amount |
+|---|---|---|---|
+| `advertiser_spend` | `advertiser:{id}` | `platform:float` | `b` |
+| `ad_revenue_share` | `platform:float` | `user:{id}` | `userShare` |
+| `ad_revenue_share` | `platform:float` | `platform:revenue` | `platformShare` |
+
+Campaign counters (`spentTodayMicro`, `spentTotalMicro`, `spendDate`) are
+updated in the same transaction. The lease is marked consumed.
+
+Other postings:
+
+- Welcome bonus: `platform:promo_liability` → `user_pending:{id}`, $1.00.
+- Social task: `platform:promo_liability` → `user:{id}`, $0.10.
+- Referral: `platform:promo_liability` → `user:{referrer}`, $0.50.
+- Payout request: `user:{id}` → `platform:float`; pending bonus unlocked to
+  `user:{id}` at the same time.
+
+Balances are derived by summing ledger rows; there is no mutable balance
+column. This prevents drift but makes balance reads aggregate queries.
+
+### 5.5 Moderation flow
+
+```mermaid
+flowchart LR
+  IN["Campaign copy / task proof"] --> POL["Policy scan<br/>blocked terms · URL · TLD · repetition"]
+  POL -->|hard reject| REJ["auto_rejected"]
+  POL -->|pass| LAYA["POST /v1/classify<br/>{task,text,url,imageKey}"]
+  LAYA -->|unreachable/timeout| REV["needs_review<br/>score 50"]
+  LAYA -->|score| ADJ["reputation adjustment<br/>prior rejects · new advertiser · approvals"]
+  ADJ --> DEC{"score bands"}
+  DEC -->|">=85, tasks >=90"| APP["auto_approved"]
+  DEC -->|"<40"| REJ
+  DEC -->|"40–84"| REV
+```
+
+Policy checks are authoritative for clear abuse and do not call the model.
+Reputation can nudge a score at the margins but cannot rescue bad content.
+
+### 5.6 Geo and privacy flow
+
+```
+request.ip
+   │
+   ▼
+resolveGeo(ip)
+   ├── cluster: coarse region label (e.g. NA-EAST)
+   ├── asn: currently null (placeholder for a real GeoIP dataset)
+   └── ipHash: SHA-256(salt + ip) for equality checks
+   │
+   ▼
+store cluster + hash only; discard raw IP
+```
+
+- `impressions.geoCluster` and `click_events.geoCluster` store labels.
+- `users.signupIp` currently stores the raw signup IP (legacy field — a privacy
+  gap to remove; see TASKS).
+- `user_network_events` stores hashed IP + cluster + day for trust scoring.
+- Fastify request logs redact `remoteAddress`, `remotePort`, `authorization`,
+  and `cookie`; handlers still receive `req.ip` in memory for geo resolution.
+
+---
+
+## 6. Modules and responsibilities
+
+### 6.1 `packages/shared`
+
+| File | Responsibility |
+|---|---|
+| `constants.ts` | Money units, 55/45 split, thresholds, viewability, pacing, cadence, trust bands, cache and telemetry limits, platform IDs. |
+| `types.ts` | API and extension contracts: prefetched ad, lease payload, impression event, batch, balance, analytics, trust breakdown. |
+| `validators.ts` | zod schemas for auth, prefetch, telemetry, campaigns, tasks, payouts, clicks. |
+| `crypto.ts` | WebCrypto base64url + HMAC-SHA256 lease signing/verification with timing-safe compare; SHA-256 hex. |
+| `platforms.ts` | Selector config per AI platform and hostname resolver. |
+| `db/schema.ts` | 17 Drizzle tables, enums, indexes, inferred row types. |
+| `db/index.ts` | `createDb()` returning a Drizzle client over a `pg.Pool`. |
+
+### 6.2 `apps/extension`
+
+| Module | Responsibility |
+|---|---|
+| `entrypoints/background.ts` | Alarm-driven cache prefetch, telemetry flush, message router (`take_ad`, `queue_impression`, `ad_click`, `flush_now`, `cache_status`). |
+| `entrypoints/content.ts` | Controller: attach to composer, detect submission, mount widget, watch generation, finalize event, client pacing. |
+| `lib/adapters/base.ts` | `PlatformAdapter` interface and default anchor resolution. |
+| `lib/adapters/platforms.ts` | Five adapters; Grok has path-scoped `x.com/i/grok` matching. |
+| `lib/ad-cache.ts` | Ring buffer, expiry/cap/cooldown filtering, atomic pop, local impression history. |
+| `lib/ad-widget.ts` | Closed Shadow DOM UI, progress, earned badge, dismiss/snooze menu, CTA. |
+| `lib/viewport-timer.ts` | IntersectionObserver + visibility + focus integration and `performance.now()` accounting. |
+| `lib/hover-tracker.ts` | 500 ms intentional-hover gate. |
+| `lib/pohi.ts` | Trusted keystroke/paste counts only; never reads input value. |
+| `lib/telemetry-queue.ts` | Bounded local queue, batch builder, drain/restore on failure. |
+| `lib/api-client.ts` | Auth header injection, optional deflate compression, base URL resolution. |
+| `lib/storage.ts` | Typed `chrome.storage.local` helpers, settings defaults, UUIDv4. |
+| `entrypoints/popup/*` | Enable toggle, display mode, placement, cache/pending/balance stats. |
+
+### 6.3 `apps/api`
+
+| Module | Responsibility |
+|---|---|
+| `src/index.ts` | Fastify bootstrap, CORS, compression, error handler, route registration, `/health`. |
+| `src/env.ts` | zod environment validation (fail fast on missing secrets). |
+| `src/context.ts` | DB/Redis context, HMAC bearer token sign/verify, `requireUser`/`requireAdvertiser`. |
+| `src/geo.ts` | Coarse geo resolution and salted IP hashing. |
+| `src/ledger.ts` | Account names, balanced postings, balance derivation. |
+| `src/referrals.ts` | Self-referral checks, referral vesting. |
+| `src/fraud/cadence.ts` | CV analysis, viewport clustering, pacing tiers. |
+| `src/fraud/trust.ts` | Composite trust score, verdict bands, fraud logging. |
+| `src/moderation/laya.ts` | Policy scan, classifier client, decision bands, reputation adjustment. |
+| `src/routes/auth-ads.ts` | Register/login, prefetch + lease issuance, A/B rotation. |
+| `src/routes/telemetry.ts` | Batch ingestion, lease replay checks, PoHI/cadence, ledger credit, impression persistence. |
+| `src/routes/users-advertisers.ts` | Balance, transparency log, tasks, payouts, referrals, campaign CRUD/stats/analytics/variants, click tracking. |
+| `src/routes/advertiser-list.ts` | Advertiser campaign listing. |
+| `src/db/migrate.ts` / `seed.ts` | Migration runner and demo advertiser/campaign seed. |
+
+### 6.4 `apps/web`
+
+| Module | Responsibility |
+|---|---|
+| `src/routes/__root.tsx` | Document shell, meta, global CSS. |
+| `src/routes/index.tsx` | Landing page. |
+| `src/routes/dashboard.tsx` | Balance stats, threshold progress, transparency table. |
+| `src/routes/tasks.tsx` | Proof upload via presigned URL, submit, history. |
+| `src/routes/referrals.tsx` | Referral link, copy button, stats. |
+| `src/routes/payouts.tsx` | Method/address form, threshold gating, trust result. |
+| `src/routes/advertiser.tsx` | Campaign form, geo chips, moderation panel, campaign table, analytics, A/B variants, geo table. |
+| `src/lib/api.ts` | Fetch wrapper, bearer token from localStorage. |
+| `src/lib/shell.tsx` | Sticky header, nav, page header. |
+| `src/lib/ui.tsx` | `Stat`, `Badge`, `Empty`, `Table`. |
+| `src/lib/format.ts` | Micro-dollar and duration formatting. |
+
+---
+
+## 7. API surface
+
+All routes are JSON. User routes require `Authorization: Bearer <token>`
+(`kind: "user"`); advertiser routes require `kind: "advertiser"`. There is
+currently no rate limiting.
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| `GET` | `/health` | — | Liveness. |
+| `POST` | `/auth/register` | — | Create user, optional device, referral attribution, welcome bonus, token. |
+| `POST` | `/auth/login` | — | Verify Argon2 hash, upsert device, token. |
+| `POST` | `/ads/prefetch` | user | Pacing, targeting, lease issuance, A/B rotation. |
+| `POST` | `/telemetry/batch` | user | Validate and settle up to 50 impressions. |
+| `GET` | `/me/balance` | user | Available/pending/lifetime/threshold. |
+| `GET` | `/me/impressions` | user | Last 100 transparency entries. |
+| `POST` | `/tasks/presign` | user | Presigned S3 PUT URL (15 min). |
+| `POST` | `/tasks/submit` | user | Moderate and optionally pay a proof. |
+| `GET` | `/tasks/mine` | user | Last 50 submissions. |
+| `POST` | `/payouts/request` | user | Threshold, uniqueness, trust audit, ledger debit. |
+| `GET` | `/me/referrals` | user | Code, link, counts, earned. |
+| `POST` | `/advertiser/campaigns` | advertiser | Create + moderate campaign. |
+| `GET` | `/advertiser/campaigns` | advertiser | List own campaigns. |
+| `POST` | `/advertiser/campaigns/:id/activate` | advertiser | Activate own campaign. |
+| `GET` | `/advertiser/campaigns/:id/stats` | advertiser | Aggregate performance. |
+| `GET` | `/advertiser/campaigns/:id/analytics` | advertiser | Totals + per-geo breakdown. |
+| `POST` | `/advertiser/campaigns/:id/variants` | advertiser | Add moderated B/C variant (max 2). |
+| `GET` | `/advertiser/campaigns/:id/variants` | advertiser | Variants + per-variant stats. |
+| `POST` | `/ads/click` | user | Record a CTA click with geo cluster. |
+
+**Missing auth endpoints:** there is no advertiser register/login route and no
+refresh-token endpoint. Seeded advertisers have a password hash but no way to
+exchange it for a token through the API yet.
+
+---
+
+## 8. Data model
+
+**17 tables.** Money is `bigint` micro-dollars (`$1.00 = 1_000_000`).
+
+```mermaid
+erDiagram
+  users ||--o{ devices : has
+  users ||--o{ auth_sessions : has
+  users ||--o{ user_network_events : emits
+  users ||--o{ ad_leases : receives
+  users ||--o{ impressions : views
+  users ||--o{ social_tasks : submits
+  users ||--o{ payout_requests : requests
+  users ||--o{ payout_destinations : owns
+  users ||--o{ referrals : refers
+  users ||--o{ referrals : referred
+  advertisers ||--o{ campaigns : runs
+  campaigns ||--o{ campaign_variants : has
+  campaigns ||--o{ ad_leases : leased
+  campaigns ||--o{ impressions : shown
+  campaigns ||--o{ click_events : clicked
+  telemetry_batches ||--o{ impressions : contains
+  ad_leases ||--o| impressions : consumed_by
+  payout_destinations ||--o{ payout_requests : receives
+```
+
+| Table | Purpose | Notable constraints |
+|---|---|---|
+| `users` | Earner accounts. | Unique email; Argon2 password hash; trust score; frozen flag. |
+| `devices` | Extension device identities. | Unique `(user_id, fingerprint_hash)`. |
+| `auth_sessions` | Refresh sessions. | Token hash + expiry + revoked; not yet rotated. |
+| `user_network_events` | Geo/network fraud signal. | Unique `(user_id, ip_hash, seen_on)`; stores hash, not IP. |
+| `advertisers` | Advertiser accounts + balance. | Unique email; balance micro. |
+| `campaigns` | Ad copy, budget, bid, targeting, moderation. | Status enum; daily/total spend; geo/platform JSONB. |
+| `campaign_variants` | A/B/C creatives. | Independent moderation; share campaign budget. |
+| `referrals` | Attribution + vesting. | One row per referred user. |
+| `ad_leases` | Single-use impression permits. | Consumed timestamp + impression id; TTL. |
+| `telemetry_batches` | Ingest audit. | Event/accepted/flagged counts; cadence findings. |
+| `impressions` | One row per event. | Client UUID PK (idempotency); status enum; PoHI JSON. |
+| `ledger_entries` | Double-entry postings. | Account + signed amount; reference index. |
+| `social_tasks` | Proof submissions. | Status enum; moderation fields; reward micro. |
+| `payout_destinations` | Normalized payout addresses. | Unique `(user, method, address)`. |
+| `payout_requests` | Withdrawal state machine. | Status enum; trust snapshot; processor reference. |
+| `fraud_logs` | Fraud/audit signals. | Severity + rule + JSON detail. |
+| `click_events` | CTA clicks. | Campaign + optional impression/user + geo cluster. |
+
+### Enums
+
+`task_platform`, `task_status`, `payout_method`, `payout_status`,
+`campaign_status`, `moderation_decision`, `ledger_entry_type`,
+`referral_status`, `fraud_severity`, `impression_status`.
+
+---
+
+## 9. Security model
+
+### 9.1 Ad leases
+
+- Payload: `{v,lid,uid,did,aid,cid,iat,exp}` serialized with a fixed field
+  order.
+- Token: `base64url(payload) + "." + base64url(HMAC-SHA256(secret, payload))`.
+- TTL 12 hours; verification allows 120 s clock skew.
+- Single use: Redis `SET lease:consumed:{lid} <impressionId> NX EX 86400`,
+  backed by `ad_leases.consumed_at`. If Redis is unavailable, the code falls
+  through to the database check.
+- Server re-checks the token user against the authenticated user and the lease
+  row before crediting.
+
+### 9.2 User/advertiser auth
+
+- Custom HMAC bearer token over `{sub,kind,did,exp}`; 30-day TTL for users.
+- Tokens are verified with `timingSafeEqual`.
+- Passwords use Argon2.
+- `requireUser` / `requireAdvertiser` enforce token kind.
+- **Gap:** no refresh-token rotation despite `auth_sessions` existing; refresh
+  tokens returned at register/login are random but not persisted or accepted.
+- **Gap:** no rate limiting, email verification, password reset, or account
+  lockout.
+
+### 9.3 Ledger integrity
+
+- Every movement is a pair of rows summing to zero.
+- No mutable balance columns; balances are sums.
+- Revenue split uses integer arithmetic, so rounding stays on the platform side.
+- Payout requests debit the user before settlement; a failed processor
+  settlement must post a compensating entry (not yet implemented).
+
+### 9.4 Moderation safety
+
+- Deterministic blocked terms and URL validation run before the classifier.
+- Classifier timeout is 4 s; errors and non-2xx responses return `null`.
+- `null` always maps to `needs_review` with score 50.
+- Social tasks use a stricter auto-approve band (90).
+- **Gap:** no human review UI; `needs_review` campaigns sit in `draft` and tasks
+  in `pending`.
+
+### 9.5 Extension safety
+
+- Content scripts are host-scoped to the five supported domains.
+- Ad UI is isolated in a closed Shadow DOM.
+- `:host { all: initial }` prevents host styles from leaking in.
+- Only passive listeners are used for trigger detection.
+- No prompt text is read; PoHI reads only trusted event counts.
+- CTA links use `rel="noopener noreferrer sponsored"` and open in a new tab.
+- **Gap:** the extension has no login/onboarding flow; the `identity` storage
+  record must be created manually for local testing.
+
+---
+
+## 10. Privacy model
+
+| Data | Stored? | Form |
+|---|---|---|
+| Prompt content | **Never** | — |
+| Chat history / AI responses | **Never** | — |
+| Raw IP | Only `users.signup_ip` (legacy gap) | Remove in a follow-up. |
+| IP equality signal | Yes | Salted SHA-256 hash + day. |
+| Location | Coarse cluster only | e.g. `NA-EAST`, `EU-WEST`. |
+| Device | Yes | User-scoped fingerprint hash; no raw browser fingerprint. |
+| Ad engagement | Yes | Duration, hover ms, click, platform, placement. |
+| Payout address | Yes | Normalized + display form. |
+| Task proof | Yes | S3 object; key stored in Postgres. |
+
+- Geo lookup is first-octet based today; a real MaxMind/DB-IP dataset is a
+  deployment concern behind the same `resolveGeo()` boundary.
+- The raw IP is resolved in memory at request time and never returned to the
+  client.
+- Analytics expose cluster labels and counts only.
+
+---
+
+## 11. Performance and scale
+
+| Concern | Current design | Limit / note |
+|---|---|---|
+| Ad injection | Local cache read + DOM mount | Target <8 ms; no network in the trigger path. |
+| Extension storage | 25-ad ring buffer | ~15 KB target; `chrome.storage.local`. |
+| Prefetch | Batches of 15, low-water 5 | Only while idle/startup or cache low. |
+| Telemetry | 15 min alarm or 15 queued events | Max 50 events/batch; queue bounded to 200 on failure restore. |
+| Compression | `deflate` if >1 KB and supported | `@fastify/compress` accepts br/gzip/deflate. |
+| Pacing | 12/hour full, 13–25 throttled (every 3rd prompt), >25 cap | Protects budget without banning power users. |
+| Cadence | CV over ≥15 prompts; 50-impression viewport cluster | Pure functions; history limited to 200 recent impressions. |
+| API scaling | Stateless; Postgres + Redis | Prefetch does N+1 variant queries per campaign today. |
+| Analytics | Aggregate SQL per campaign | Indexed on `(campaign_id, created_at)`. |
+| Ledger reads | `SUM` per account | Fine at demo scale; materialized balances are a future optimisation. |
+| Fraud history | Last 200 impressions / 1 hour | Older signals fall out of the window. |
+
+---
+
+## 12. Failure modes and fallbacks
+
+| Failure | Behaviour |
+|---|---|
+| Redis down | Lease replay falls back to the `ad_leases.consumed_at` database check. |
+| PostgreSQL down | Requests fail 500; no credit is issued. |
+| Moderation service down/timeout | Content routes to `needs_review`; never auto-approved. |
+| Object storage down | Task proof upload fails; no task can be submitted. |
+| API unreachable from extension | Prefetch is skipped; existing cached ads continue to serve. |
+| Telemetry flush fails | Events are restored to the bounded local queue. |
+| Extension service worker suspended | State is in `chrome.storage.local`; alarms wake it for flush. |
+| AI DOM changes | Adapter selectors fail; no ad is injected (fails silent). |
+| AI streams before 5 s | `wait_time_only` closes early and earns nothing; `persist_until_5s` keeps the ad until earned. |
+| User switches tab/window | Viewport clock pauses; accrued time is preserved. |
+| Duplicate telemetry event | `impressions.id` PK + `onConflictDoNothing` makes persistence idempotent; the lease is consumed once. |
+| Referral self-dealing | Blocked by fingerprint/IP overlap; bonus only vests on $1.00 verified earnings. |
+
+---
+
+## 13. Deployment notes
+
+- **Current compose** starts infrastructure only: PostgreSQL, Redis, MinIO
+  (+ bucket initializer), and the local moderation stub. API, web, and extension
+  run from the host via pnpm.
+- **Database migrations** live in `apps/api/drizzle` (generated, gitignored).
+  Run `pnpm db:generate`, then `pnpm db:migrate`.
+- **Seed** creates `demo@advertiser.test` with password
+  `demo-advertiser-pass-123`, $50 balance, and two active campaigns.
+- **API start** requires a built `@meantime/shared` because package exports
+  point at `dist/`. Turbo `build` handles ordering; `dev` depends on `^build`.
+- **Web start** uses `srvx` to serve the SSR entry and static assets.
+- **Extension** builds to `.output/chrome-mv3` and is loaded unpacked.
+- **No reverse proxy/TLS** is configured. Production needs TLS termination,
+  secret management, backups, and a real object-storage bucket.
+
+---
+
+## 14. Known technical gaps
+
+These are tracked as tasks in [TASKS.md](./TASKS.md).
+
+1. No web sign-in/sign-up screens; dashboard calls fail without a manually
+   inserted `mt_token`.
+2. No extension onboarding/login; `identity` is never written by the UI.
+3. No advertiser register/login endpoint or UI.
+4. No referral landing route (`/r/:code`) or signup attribution UI.
+5. No human review/admin UI for `needs_review` content or frozen payouts.
+   Advertiser self-activation of unapproved campaigns is now blocked
+   (`409 moderation_required`), so such campaigns stay `draft` until a reviewer
+   clears them.
+6. No real payout processor; requests stop at `approved`/`auditing`.
+7. No automated tests (unit, integration, or Playwright).
+8. No rate limiting, CSRF protection for cookie-less bearer flows (not needed
+   yet), email verification, or password reset.
+9. `users.signupIp` stores a raw IP; it should be removed/hashed.
+10. `auth_sessions` is unused; refresh tokens are not persisted.
+11. `POST /ads/click` parses the lease payload without verifying its signature.
+12. `persist()` re-parses the lease token to recover the lease id instead of
+    using the verified payload.
+13. Prefetch performs an N+1 query for variants and loads all active campaigns
+    before filtering in memory.
+14. The moderation service is a local stub; a real classifier must be supplied.
+15. `@meantime/shared` is built output-linked, so a fresh clone must build
+    before starting production artifacts (Turbo handles this).
+16. Referral attribution rejects signups whose hashed IP overlaps the
+    referrer's, so a successful referral cannot be exercised from a single
+    machine/egress IP.
+
+---
+
+## 15. Verification status (2026-11-03)
+
+Docker was unavailable in the authoring environment, so compose itself was not
+executed. The database-dependent path was exercised against an embedded
+PostgreSQL 18 instance on `127.0.0.1:55432`, with the API built via `tsc` and
+run with `node dist/index.js`. The moderation stub ran on `:8080`.
+
+Verified:
+
+- `pnpm typecheck` and `pnpm build` pass for all four workspaces.
+- `pnpm db:migrate` applies all 17 tables; `pnpm db:seed` inserts the demo
+  advertiser and two active campaigns.
+- `POST /auth/register` and `/auth/login` return tokens; `/me/balance` starts at
+  the $1.00 pending welcome bonus.
+- `POST /ads/prefetch` issues signed leases with pacing info.
+- `POST /telemetry/batch`:
+  - a 5.5 s view with valid PoHI is `verified` and credits 55% of the bid;
+  - replaying the same lease is `lease_already_consumed`;
+  - a tampered token is `lease_bad_signature`;
+  - a 3 s view is `below_threshold`;
+  - a low interaction score is `no_trusted_input`.
+- The ledger stays balanced: user credit + platform revenue equals the
+  advertiser debit, and replay adds nothing.
+- `/me/impressions`, `/me/referrals`, `/tasks/presign`, and the payout threshold
+  guard respond as expected.
+- Advertiser routes (campaign create/list/variants/stats/analytics) work when
+  given a signed advertiser token. `POST /ads/click` records a click.
+- Moderation fails closed: with the stub down a campaign is `draft` /
+  `needs_review`; with it up a clean campaign is `active` / `auto_approved`; a
+  blocked term is `auto_rejected` before any network call.
+
+Not verified:
+
+- `docker compose up` (no Docker binary).
+- MinIO object upload (only presigned URL generation was tested).
+- The extension loaded unpacked in Chrome.
+- A successful referral attribution (same-IP rejection) and a payout above the
+  $5 threshold (no funded account).
+- Refresh-token persistence/rotation (not implemented).
+
+Two bugs found during this run were fixed: BigInt money columns now serialize
+as decimal strings (the web client already types them as strings), and the
+referral lookup no longer depends on `pgcrypto`.
