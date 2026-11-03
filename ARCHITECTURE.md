@@ -30,7 +30,7 @@ flowchart LR
 
   subgraph Data
     PG[("PostgreSQL 16<br/>Drizzle schema")]
-    RD[("Redis 7<br/>lease replay / pacing")]
+    RD[("Redis 7<br/>optional cache")]
     S3[("S3 / MinIO<br/>task proofs")]
     LAYA["Laya classifier<br/>laya-serve · POST /v1/systemone"]
   end
@@ -101,7 +101,7 @@ compiled output. This is required for production Node execution and for
 | Validation | zod 3 | Runtime validation at HTTP boundaries, shared with types. |
 | ORM | Drizzle ORM 0.38 + `node-postgres` | Typed SQL, explicit schema, migration generation. |
 | Database | PostgreSQL 16 | Relational integrity, transactions, JSONB, aggregate queries. |
-| Cache | Redis 7 (`ioredis`) | Atomic `SET NX` for lease replay protection; optional pacing cache. |
+| Cache | Redis 7 (`ioredis`) | Optional cache; lease replay protection is enforced by the database, so a Redis outage cannot admit a replay or reject a valid lease. |
 | Object storage | S3-compatible (MinIO locally) | Presigned task-proof uploads. |
 | Web | React 19, TanStack Router/Start 1.x, Vite 8, Tailwind 3 | File routes, SSR, small client bundle, utility-first styling. |
 | Web production server | `srvx` | Serves the TanStack Start server entry plus static client assets. |
@@ -255,15 +255,14 @@ sequenceDiagram
   U->>CS: 5,000 ms active view (or AI streams first)
   CS->>CS: finalize event, destroy widget
   CS->>BG: queue_impression
-  BG->>BG: queue (flush at 15 items or 15 min)
+  BG->>BG: bounded queue (flush at 15 items or 15 min, max 50/batch)
   BG->>API: POST /telemetry/batch (deflate >1 KB)
-  API->>R: SET lease:consumed:{lid} NX EX 86400
-  API->>DB: load lease row, verify not consumed
+  API->>DB: UPDATE ad_leases SET consumed_at WHERE id=? AND consumed_at IS NULL
   API->>API: PoHI, threshold, cadence checks
-  API->>DB: transaction: ledger postings + campaign spend + lease consume
-  API->>DB: insert impression + maybe vest referral
+  API->>DB: tx: lock campaign + daily budget gate + insert impression (PK idempotency)
+  API->>DB: ledger postings + campaign spend + referral vesting
   API-->>BG: {accepted, results[]}
-  BG->>BG: keep queue drained on success, restore on failure
+  BG->>BG: ack only accepted events; 4xx poison dropped, network/5xx retried
 ```
 
 ### 5.3 View accounting
@@ -303,7 +302,11 @@ Balanced postings in one transaction:
 | `ad_revenue_share` | `platform:float` | `platform:revenue` | `platformShare` |
 
 Campaign counters (`spentTodayMicro`, `spentTotalMicro`, `spendDate`) are
-updated in the same transaction. The lease is marked consumed.
+updated in the same transaction, after the campaign row is locked and its daily
+budget is checked. The impression row is inserted before any transfer: its
+client UUID is the idempotency key, so a retried or duplicated event cannot
+credit twice. The lease was claimed atomically before this transaction; a
+failure here loses at most that one lease.
 
 Other postings:
 
@@ -311,7 +314,10 @@ Other postings:
 - Social task: `platform:promo_liability` → `user:{id}`, $0.10.
 - Referral: `platform:promo_liability` → `user:{referrer}`, $0.50.
 - Payout request: `user:{id}` → `platform:float`; pending bonus unlocked to
-  `user:{id}` at the same time.
+  `user:{id}` at the same time. The whole request (balance re-check, open-request
+guard, destination claim, request row and debit) runs inside one transaction
+  under a `SELECT … FOR UPDATE` lock on the user row, so concurrent withdrawals
+  cannot overdraw an account.
 
 Balances are derived by summing ledger rows; there is no mutable balance
 column. This prevents drift but makes balance reads aggregate queries.
@@ -521,10 +527,10 @@ erDiagram
 | `impressions` | One row per event. | Client UUID PK (idempotency); status enum; PoHI JSON. |
 | `ledger_entries` | Double-entry postings. | Account + signed amount; reference index. |
 | `social_tasks` | Proof submissions. | Status enum; moderation fields; reward micro. |
-| `payout_destinations` | Normalized payout addresses. | Unique `(user, method, address)`. |
+| `payout_destinations` | Normalized payout addresses. | Unique `(user, method, address)` and unique `(method, address)` globally. |
 | `payout_requests` | Withdrawal state machine. | Status enum; trust snapshot; processor reference. |
 | `fraud_logs` | Fraud/audit signals. | Severity + rule + JSON detail. |
-| `click_events` | CTA clicks. | Campaign + optional impression/user + geo cluster. |
+| `click_events` | CTA clicks. | Campaign + optional impression/user + geo cluster; unique per verified impression. |
 
 ### Enums
 
@@ -749,6 +755,11 @@ Verified:
 - The end-to-end earn loop on the rebuilt API: prefetch → 5.2 s verified
   telemetry event → `earnedMicro: 11000` (55% of a 20,000 µ$ bid) → balance and
   impression list.
+- Hardening checks (22/22): lease replay, forged HMAC, duplicate impression,
+  exhausted campaign budget, forged/duplicate/foreign clicks, concurrent payout
+  requests (exactly one debit), duplicate task submissions, non-http URLs,
+  foreign screenshot keys, unauthenticated advertiser routes, and a zero-sum
+  ledger.
 
 Not verified:
 

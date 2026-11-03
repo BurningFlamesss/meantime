@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import {
   REFERRAL_QUALIFY_EARNINGS_USD,
@@ -18,6 +19,11 @@ import { ACCOUNTS, balanceOf, postTransfer } from "./ledger.js";
  * farmed account that never genuinely uses the product pays nothing. On top
  * of that, self-referrals are blocked by network and device identity.
  */
+
+/** Stable, non-sequential referral code. One definition for API and web links. */
+export function referralCodeFor(userId: string): string {
+  return createHash("sha256").update(`referral:${userId}`).digest("hex").slice(0, 8);
+}
 
 export interface ReferralEligibility {
   eligible: boolean;

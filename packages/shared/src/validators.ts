@@ -52,12 +52,29 @@ export const prefetchRequestSchema = z.object({
   platforms: z.array(z.string().max(32)).max(8).default([]),
 });
 
+/**
+ * Ads and task proofs must point at a normal web page. Zod's `.url()` accepts
+ * any scheme (`javascript:`, `data:`, `file:`), which would let a campaign send
+ * the extension or a reviewer somewhere dangerous, so the scheme is pinned.
+ */
+export const httpUrlSchema = z
+  .string()
+  .max(512)
+  .url()
+  .refine((value) => /^https?:\/\//i.test(value), { message: "must_be_http_url" });
+
+export const taskUrlSchema = z
+  .string()
+  .max(1024)
+  .url()
+  .refine((value) => /^https?:\/\//i.test(value), { message: "must_be_http_url" });
+
 export const campaignInputSchema = z.object({
   name: z.string().min(2).max(80),
   headline: z.string().min(4).max(AD_COPY_LIMITS.HEADLINE_MAX),
   bodyText: z.string().min(10).max(AD_COPY_LIMITS.BODY_MAX),
   ctaText: z.string().min(2).max(AD_COPY_LIMITS.CTA_MAX),
-  targetUrl: httpUrlSchema.max(512),
+  targetUrl: httpUrlSchema,
   dailyBudgetMicro: z.number().int().positive().max(1_000_000_000_000),
   cpiMicro: z.number().int().positive().max(100_000_000),
   targetPlatforms: z.array(z.string().max(32)).min(1).max(8),
@@ -82,20 +99,9 @@ export const loginSchema = z.object({
   fingerprintHash: z.string().min(8).max(128).optional(),
 });
 
-/**
- * Ads and task proofs must point at a normal web page. Zod's `.url()` accepts
- * any scheme (`javascript:`, `data:`, `file:`), which would let a campaign send
- * the extension or a reviewer somewhere dangerous, so the scheme is pinned.
- */
-export const httpUrlSchema = z
-  .string()
-  .url()
-  .max(1024)
-  .refine((value) => /^https?:\/\//i.test(value), { message: "must_be_http_url" });
-
 export const taskSubmissionSchema = z.object({
   taskType: z.enum(["x", "linkedin", "reddit", "chrome_web_store", "other"]),
-  postUrl: httpUrlSchema,
+  postUrl: taskUrlSchema,
   /** Object key returned by /tasks/presign; must live under the user's prefix. */
   screenshotKey: z
     .string()

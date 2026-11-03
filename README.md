@@ -60,7 +60,7 @@ pnpm --filter @meantime/extension build
 
 ## Anti-fraud layers
 
-1. **Cryptographic leases** — HMAC-SHA256, single-use, Redis SETNX + DB fallback.
+1. **Cryptographic leases** — HMAC-SHA256, single-use, claimed by one atomic `UPDATE ... WHERE consumed_at IS NULL` (correct with or without Redis).
 2. **Proof of Human Interaction** — `isTrusted` event scalars and host-DOM
    mutation checks; never reads prompt text.
 3. **Temporal entropy** — inter-prompt interval CV flags robotic cadence

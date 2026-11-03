@@ -33,11 +33,7 @@ import { ACCOUNTS, balanceOf, postTransfer } from "../ledger.js";
 import { computeTrustScore, verdictFor, logFraud } from "../fraud/trust.js";
 import { moderateCampaign, moderateTask } from "../moderation/laya.js";
 import { resolveGeo, clusterForIp } from "../geo.js";
-import { createHash } from "node:crypto";
-
-function referralCodeFor(userId: string): string {
-  return createHash("sha256").update(`referral:${userId}`).digest("hex").slice(0, 8);
-}
+import { referralCodeFor } from "../referrals.js";
 
 function s3(ctx: AppContext): S3Client {
   return new S3Client({
@@ -606,28 +602,28 @@ export async function advertiserRoutes(app: FastifyInstance, ctx: AppContext) {
     const lease = verification.payload;
     if (lease.uid !== auth.userId) return reply.code(403).send({ error: "lease_user_mismatch" });
 
+    // The lease is the authority. A click can arrive before the batched
+    // telemetry flush, so an absent impression is allowed; an existing
+    // impression must belong to this user, this lease, and be paid.
     const [impression] = await ctx.db
-      .select({ id: impressions.id, campaignId: impressions.campaignId })
+      .select({ id: impressions.id, campaignId: impressions.campaignId, earned: impressions.earned })
       .from(impressions)
-      .where(
-        and(
-          eq(impressions.id, body.impressionId),
-          eq(impressions.userId, auth.userId),
-          eq(impressions.leaseId, lease.lid),
-          eq(impressions.earned, true),
-        ),
-      )
+      .where(and(eq(impressions.leaseId, lease.lid), eq(impressions.userId, auth.userId)))
       .limit(1);
-    if (!impression) return reply.code(409).send({ error: "impression_not_verified" });
-    if (impression.campaignId !== lease.cid) return reply.code(409).send({ error: "campaign_mismatch" });
+    if (impression) {
+      if (!impression.earned) return reply.code(409).send({ error: "impression_not_verified" });
+      if (impression.campaignId !== lease.cid) return reply.code(409).send({ error: "campaign_mismatch" });
+      if (impression.id !== body.impressionId) return reply.code(409).send({ error: "impression_mismatch" });
+    }
 
     // Geo from request IP; raw IP is resolved to a cluster and discarded.
     const geo = resolveGeo(req.ip);
     const inserted = await ctx.db
       .insert(clickEvents)
       .values({
-        impressionId: impression.id,
-        campaignId: impression.campaignId,
+        impressionId: impression?.id ?? null,
+        leaseId: lease.lid,
+        campaignId: lease.cid,
         userId: auth.userId,
         geoCluster: geo.cluster,
       })

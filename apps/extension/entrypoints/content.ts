@@ -183,9 +183,16 @@ class MeanTimeController {
       // server re-checks authoritatively at prefetch/telemetry time.
       if (!(await this.pacingAllows())) return;
 
-      // Wait briefly for the sent prompt bubble to render. Taking an ad before
-      // there is somewhere to put it would burn the lease.
-      const mountPoint = await this.waitForMountPoint(settings.placement, 1_500);
+      // Wait briefly for the *new* sent prompt bubble to render. Resolving the
+      // previous message's slot would anchor the ad under the wrong prompt.
+      const viewport = performance.now();
+      const initialUserNode = this.adapter.findLatestUserMessage();
+      const mountPoint = await this.waitForMountPoint(
+        settings.placement,
+        initialUserNode,
+        1_500,
+        viewport,
+      );
       if (!mountPoint) return;
 
       const snap = this.pohi.snapshot(false);
@@ -246,15 +253,30 @@ class MeanTimeController {
     }
   }
 
-  /** Resolve the placement with a short poll; the prompt bubble may not exist yet. */
-  private async waitForMountPoint(placement: string, timeoutMs: number): Promise<HTMLElement | null> {
-    const deadline = performance.now() + timeoutMs;
+  /**
+   * Resolve the placement with a short poll. Prefer the slot under a user
+   * message that did not exist at submit time, so the ad follows the prompt
+   * just sent; fall back to the current best slot if the site is slow.
+   */
+  private async waitForMountPoint(
+    placement: string,
+    initialUserNode: HTMLElement | null,
+    timeoutMs: number,
+    startedAt: number,
+  ): Promise<HTMLElement | null> {
+    const deadline = startedAt + timeoutMs;
     while (performance.now() < deadline) {
-      const point = this.resolveMountPoint(placement);
-      if (point && point.isConnected) return point;
+      const latest = this.adapter.findLatestUserMessage();
+      const isNew = initialUserNode === null ? latest !== null : latest !== null && latest !== initialUserNode;
+      if (isNew) {
+        const point = this.resolveMountPoint(placement);
+        if (point && point.isConnected) return point;
+      }
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    return null;
+    // The composer may not render a distinct bubble on this platform; use the
+    // newest available slot rather than waste the lease.
+    return this.resolveMountPoint(placement);
   }
 
   private resolveMountPoint(placement: string): HTMLElement | null {

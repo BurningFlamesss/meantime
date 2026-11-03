@@ -106,7 +106,14 @@ export class AdWidget {
     const cta = document.createElement("a");
     cta.className = "mt-cta";
     cta.textContent = ad.ctaText;
-    cta.href = ad.targetUrl;
+    // Defense in depth for ads created before the API pinned http(s): a
+    // `javascript:` or `data:` href must never be clickable.
+    try {
+      const url = new URL(ad.targetUrl);
+      if (url.protocol === "http:" || url.protocol === "https:") cta.href = url.toString();
+    } catch {
+      // Leave the anchor without an href.
+    }
     cta.target = "_blank";
     cta.rel = "noopener noreferrer sponsored";
     cta.addEventListener("click", () => this.callbacks.onClickCta());

@@ -31,12 +31,6 @@ import { pacingFor } from "../fraud/cadence.js";
 import { clusterForIp, resolveGeo } from "../geo.js";
 import { checkReferralAllowed } from "../referrals.js";
 import { logFraud } from "../fraud/trust.js";
-import { createHash } from "node:crypto";
-
-function referralCodeFor(userId: string): string {
-  return createHash("sha256").update(`referral:${userId}`).digest("hex").slice(0, 8);
-}
-
 /** Record a geo/network signal for fraud scoring. Raw IP is hashed, never stored. */
 async function recordNetworkEvent(ctx: AppContext, userId: string, ip: string): Promise<void> {
   const geo = resolveGeo(ip);

@@ -141,8 +141,21 @@ private beta · P2 = post-launch / polish
 - [x] Added `infra/laya-host.sh` so the real server can be run without Docker.
 - [x] Updated `infra/laya-stub` to answer the same choice protocol with
       deterministic probabilities.
-- [x] Re-verified the earn loop on the rebuilt API: prefetch → 5.2 s verified
-      view → 11,000 µ$ credited (55% of a 20,000 µ$ bid) → balance/impressions.
+- [x] Hardening pass: payout requests are transactional under a user-row lock
+      (concurrent withdrawals debit once); telemetry claims leases with one
+      conditional UPDATE, inserts the impression as an idempotency gate, and
+      enforces the campaign daily budget under a row lock; clicks require a
+      valid HMAC lease and a verified impression owned by the caller; task
+      rewards are unique per (user, post URL).
+- [x] Added http(s)-only validation for campaign/task URLs, a global payout
+      destination uniqueness index, and a screenshot-key ownership check.
+- [x] Extension: stable document-level passive listeners across SPA nav,
+      in-flight/mount/watchdog guards, pagehide flush, platform-targeted ads,
+      and a bounded peek/ack telemetry queue with a flush lock and poison-batch
+      handling.
+- [x] 22/22 adversarial checks pass (replay, forged lease, duplicate
+      impression, budget exhaustion, click forgery, concurrent payouts, task
+      duplicates, URL/key validation, zero-sum ledger).
 - [ ] Docker compose actually executed (blocked: no Docker binary/root).
 
 ---
@@ -365,8 +378,8 @@ raw IPs.
 | B-02 | Extension never writes `identity`. | Cannot prefetch or report telemetry after install. | T-02. |
 | B-03 | No advertiser auth route, yet seeded advertiser exists. | Portal cannot be used. | T-03. |
 | B-04 | Referral link `/r/:code` 404s. | Referral loop is broken. | T-04. |
-| B-05 | `POST /ads/click` parses the lease without verifying the HMAC. | Forged clicks possible. | Verify with `verifyLeaseToken`. |
-| B-06 | `persist()` extracts the lease id by re-parsing the token. | Duplicated logic; unnecessary failure mode. | Pass `lease.lid` through. |
+| B-05 | ~~`POST /ads/click` parses the lease without verifying the HMAC.~~ Fixed: verifies the lease, requires a verified impression owned by the caller, and dedupes per impression. | — | — |
+| B-06 | ~~`persist()` extracts the lease id by re-parsing the token.~~ Fixed: the verified `lease.lid` is passed through. | — | — |
 | B-07 | `users.signupIp` stores a raw IP. | Privacy violation. | T-07. |
 | B-08 | ~~Advertiser could activate a `needs_review` draft.~~ Fixed: `/activate` now returns `409 moderation_required` unless moderation was `auto_approved`. | No reviewer UI yet, so review-blocked campaigns stay off. | Build the reviewer queue. |
 | B-09 | No tests. | Regressions likely. | P1 testing. |

@@ -462,6 +462,8 @@ export const clickEvents = pgTable(
     impressionId: uuid("impression_id").references(() => impressions.id, {
       onDelete: "set null",
     }),
+    /** The signed lease that authorized the click; one click per lease. */
+    leaseId: uuid("lease_id").references(() => adLeases.id, { onDelete: "set null" }),
     campaignId: uuid("campaign_id")
       .notNull()
       .references(() => campaigns.id, { onDelete: "cascade" }),
@@ -472,8 +474,9 @@ export const clickEvents = pgTable(
   },
   (t) => [
     index("click_events_campaign_idx").on(t.campaignId, t.clickedAt),
-    // At most one click per verified impression; retries are idempotent.
+    // At most one click per impression and per lease; retries are idempotent.
     uniqueIndex("click_events_impression_uidx").on(t.impressionId),
+    uniqueIndex("click_events_lease_uidx").on(t.leaseId),
   ],
 );
 
