@@ -1,10 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { and, desc, eq, gt, sql } from "drizzle-orm";
 import argon2 from "argon2";
+import { createHash } from "node:crypto";
 import {
   LEASE,
   EXTENSION_CACHE,
   prefetchRequestSchema,
+  refreshTokenSchema,
   registerUserSchema,
   loginSchema,
   signLeaseToken,
@@ -17,6 +19,7 @@ import {
 } from "@meantime/shared";
 import {
   adLeases,
+  authSessions,
   campaigns,
   campaignVariants,
   devices,
@@ -31,6 +34,32 @@ import { pacingFor } from "../fraud/cadence.js";
 import { clusterForIp, resolveGeo } from "../geo.js";
 import { checkReferralAllowed } from "../referrals.js";
 import { logFraud } from "../fraud/trust.js";
+import { rateLimit } from "../rate-limit.js";
+
+const ACCESS_TTL_SECONDS = 60 * 60 * 24 * 30;
+const REFRESH_TTL_MS = 60 * 24 * 60 * 60 * 1000;
+
+function hashRefreshToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+/** Persist a refresh session and return the raw token (only the hash is stored). */
+async function issueSession(
+  ctx: AppContext,
+  userId: string,
+  deviceId: string | null,
+): Promise<{ refreshToken: string; expiresAt: Date }> {
+  const refreshToken = randomToken();
+  const expiresAt = new Date(Date.now() + REFRESH_TTL_MS);
+  await ctx.db.insert(authSessions).values({
+    userId,
+    deviceId,
+    refreshTokenHash: hashRefreshToken(refreshToken),
+    expiresAt,
+  });
+  return { refreshToken, expiresAt };
+}
+
 /** Record a geo/network signal for fraud scoring. Raw IP is hashed, never stored. */
 async function recordNetworkEvent(ctx: AppContext, userId: string, ip: string): Promise<void> {
   const geo = resolveGeo(ip);
@@ -49,6 +78,7 @@ async function recordNetworkEvent(ctx: AppContext, userId: string, ip: string): 
 
 export async function authRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post("/auth/register", async (req, reply) => {
+    if (!rateLimit(req, reply, "auth_register", 8, 600_000)) return;
     const body = registerUserSchema.parse(req.body);
     const existing = await ctx.db.select({ id: users.id }).from(users).where(eq(users.email, body.email)).limit(1);
     if (existing.length > 0) return reply.code(409).send({ error: "email_taken" });
@@ -123,12 +153,24 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext) {
       await tx.update(users).set({ welcomeBonusCredited: true }).where(eq(users.id, user.id));
     });
 
-    const accessToken = signAuthToken({ sub: user.id, kind: "user", did: deviceId ?? undefined }, ctx.env.JWT_SECRET, 3600 * 24 * 30);
+    const accessToken = signAuthToken(
+      { sub: user.id, kind: "user", did: deviceId ?? undefined },
+      ctx.env.JWT_SECRET,
+      ACCESS_TTL_SECONDS,
+    );
+    const session = await issueSession(ctx, user.id, deviceId);
     await recordNetworkEvent(ctx, user.id, ip);
-    return { userId: user.id, deviceId, accessToken, refreshToken: randomToken() };
+    return {
+      userId: user.id,
+      deviceId,
+      accessToken,
+      refreshToken: session.refreshToken,
+      refreshExpiresAt: session.expiresAt.getTime(),
+    };
   });
 
   app.post("/auth/login", async (req, reply) => {
+    if (!rateLimit(req, reply, "auth_login", 10, 600_000)) return;
     const body = loginSchema.parse(req.body);
     const [user] = await ctx.db.select().from(users).where(eq(users.email, body.email)).limit(1);
     if (!user || !(await argon2.verify(user.passwordHash, body.password))) {
@@ -147,9 +189,92 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext) {
         .returning();
       deviceId = device?.id ?? null;
     }
-    const accessToken = signAuthToken({ sub: user.id, kind: "user", did: deviceId ?? undefined }, ctx.env.JWT_SECRET, 3600 * 24 * 30);
+    const accessToken = signAuthToken(
+      { sub: user.id, kind: "user", did: deviceId ?? undefined },
+      ctx.env.JWT_SECRET,
+      ACCESS_TTL_SECONDS,
+    );
+    const session = await issueSession(ctx, user.id, deviceId);
     await recordNetworkEvent(ctx, user.id, req.ip);
-    return { userId: user.id, deviceId, accessToken, refreshToken: randomToken() };
+    return {
+      userId: user.id,
+      deviceId,
+      accessToken,
+      refreshToken: session.refreshToken,
+      refreshExpiresAt: session.expiresAt.getTime(),
+    };
+  });
+
+  /**
+   * Rotate a refresh token: the presented session is revoked and replaced in
+   * the same transaction. A reused (already rotated) token fails closed, which
+   * makes token theft detectable rather than silently accepted.
+   */
+  app.post("/auth/refresh", async (req, reply) => {
+    if (!rateLimit(req, reply, "auth_refresh", 60, 60_000)) return;
+    const body = refreshTokenSchema.parse(req.body);
+    const hash = hashRefreshToken(body.refreshToken);
+
+    const [session] = await ctx.db
+      .select()
+      .from(authSessions)
+      .where(
+        and(
+          eq(authSessions.refreshTokenHash, hash),
+          sql`${authSessions.revokedAt} IS NULL`,
+          gt(authSessions.expiresAt, new Date()),
+        ),
+      )
+      .limit(1);
+    if (!session) return reply.code(401).send({ error: "invalid_refresh_token" });
+
+    const rotated = await ctx.db.transaction(async (tx) => {
+      const [revoked] = await tx
+        .update(authSessions)
+        .set({ revokedAt: new Date() })
+        .where(and(eq(authSessions.id, session.id), sql`${authSessions.revokedAt} IS NULL`))
+        .returning({ id: authSessions.id });
+      if (!revoked) return null; // another request rotated it first
+
+      const refreshToken = randomToken();
+      const expiresAt = new Date(Date.now() + REFRESH_TTL_MS);
+      await tx.insert(authSessions).values({
+        userId: session.userId,
+        deviceId: session.deviceId,
+        refreshTokenHash: hashRefreshToken(refreshToken),
+        expiresAt,
+      });
+      return { refreshToken, expiresAt };
+    });
+    if (!rotated) return reply.code(401).send({ error: "invalid_refresh_token" });
+
+    const accessToken = signAuthToken(
+      { sub: session.userId, kind: "user", did: session.deviceId ?? undefined },
+      ctx.env.JWT_SECRET,
+      ACCESS_TTL_SECONDS,
+    );
+    return {
+      userId: session.userId,
+      deviceId: session.deviceId,
+      accessToken,
+      refreshToken: rotated.refreshToken,
+      refreshExpiresAt: rotated.expiresAt.getTime(),
+    };
+  });
+
+  app.post("/auth/logout", async (req, reply) => {
+    if (!rateLimit(req, reply, "auth_logout", 60, 60_000)) return;
+    const body = refreshTokenSchema.parse(req.body);
+    await ctx.db
+      .update(authSessions)
+      .set({ revokedAt: new Date() })
+      .where(
+        and(
+          eq(authSessions.refreshTokenHash, hashRefreshToken(body.refreshToken)),
+          sql`${authSessions.revokedAt} IS NULL`,
+        ),
+      );
+    return { ok: true };
   });
 }
 
@@ -157,6 +282,7 @@ export async function adsRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post("/ads/prefetch", async (req, reply) => {
     const auth = requireUser(req, reply, ctx.env.JWT_SECRET);
     if (!auth?.userId) return;
+    if (!rateLimit(req, reply, "prefetch", 60, 60_000, auth.userId)) return;
 
     const body = prefetchRequestSchema.parse(req.body);
     const count = Math.min(body.count, EXTENSION_CACHE.PREFETCH_BATCH_SIZE);

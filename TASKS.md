@@ -14,7 +14,7 @@ private beta · P2 = post-launch / polish
 | Shared contracts, schema, crypto, selectors | `[x]` | `pnpm typecheck` + `pnpm build` pass. |
 | Fastify API and fraud engine | `[x]` verified | Against PostgreSQL 18: register/login, prefetch, telemetry (verified, replay, forged lease, low PoHI, below threshold), balance, impressions, referrals, tasks presign, payouts threshold, advertiser create/list/variants/stats/analytics/click. |
 | TanStack Start web app | `[x]` code / `[~]` auth | Production SSR bundle serves all routes with 200. Authenticated routes still need a manually set token (T-01). |
-| WXT extension | `[x]` build | `.output/chrome-mv3` builds (169.56 KB). Not loaded in Chrome. |
+| WXT extension | `[x]` verified | `.output/chrome-mv3` builds (176.07 KB) and was loaded in real Chromium via Playwright: ad injection, 5 s persistence, telemetry, and payment all passed. |
 | Database migrations | `[x]` applied | `apps/api/drizzle/0000_uneven_tag.sql`, 17 tables, applied to PostgreSQL 18. |
 | Demo seed | `[x]` run | 1 advertiser + 2 active campaigns inserted. |
 | Docker compose | `[!]` not run | Docker is not installed in the authoring environment (no root, no Docker socket). Verified with an embedded PostgreSQL + host-run Laya instead. |
@@ -156,6 +156,24 @@ private beta · P2 = post-launch / polish
 - [x] 22/22 adversarial checks pass (replay, forged lease, duplicate
       impression, budget exhaustion, click forgery, concurrent payouts, task
       duplicates, URL/key validation, zero-sum ledger).
+- [x] Added bounded in-process rate limits for register/login/refresh,
+      prefetch, telemetry, task submission, payouts, clicks, and reviewer
+      routes; verified 429 at the register/login bounds.
+- [x] Persisted refresh sessions with single-use rotation and logout
+      revocation; verified reuse of a rotated token returns 401.
+- [x] Added the reviewer API and `/admin` UI for campaigns, A/B variants,
+      tasks, and auditing/frozen payouts. Every decision is written to
+      `fraud_logs`; task approval pays once and payout rejection refunds.
+- [x] Verified the built extension in real Chromium against a ChatGPT-shaped
+      fixture: mount under the new prompt, persist after a completed answer,
+      earn at 5 s, flush telemetry, and credit 55% of the bid. Fixed a race
+      where a fast model's answer arriving during mount was treated as the
+      baseline and rejected as `no_ai_mutation`.
+- [x] Task proofs are now verified in object storage at submit time (must
+      exist, be PNG/JPEG/WebP, and be ≤5 MB); verified a real presigned PUT,
+      plus rejection of missing, non-image, and oversized objects.
+- [x] Fixed presigned PUTs carrying an empty-payload CRC32 checksum (which
+      made real uploads fail) and allowed both loopback CORS spellings.
 - [ ] Docker compose actually executed (blocked: no Docker binary/root).
 
 ---
@@ -223,8 +241,10 @@ referrer sees a pending referral in `/me/referrals`.
       (embedded fallback, not compose).
 - [x] `pnpm db:seed` inserts the demo advertiser and two campaigns.
 - [ ] A document exists describing how to verify each service.
-- [~] MinIO upload path only verified as far as presigned URL generation; no
-      object was uploaded because MinIO was not running.
+- [x] Object upload path verified end to end with `s3rver` (an S3-compatible
+      emulator): presigned PUT, HeadObject validation, task submit, and
+      reviewer payment. MinIO itself was not run because community server
+      binaries are no longer published (old download paths return 410).
 
 **Acceptance:** from a clean machine with Docker, the documented commands bring
 up infra and seed data without manual edits.
@@ -269,12 +289,13 @@ raw IPs.
 
 ### Security
 
-- [ ] Rate limiting (`@fastify/rate-limit`) on auth, prefetch, telemetry,
-      payouts, and clicks.
-- [ ] Persist and rotate refresh tokens; revoke sessions on password change.
+- [x] Rate limiting on auth, prefetch, telemetry, tasks, payouts, clicks, and
+      reviewer routes.
+- [x] Persist and rotate refresh tokens; logout revokes the session.
+- [ ] Revoke all sessions on password change (no password-change flow yet).
 - [ ] Add email verification and password reset.
-- [ ] Verify the lease signature in `POST /ads/click` before recording a click.
-- [ ] Use the verified lease payload in `persist()` instead of re-parsing the
+- [x] Verify the lease signature in `POST /ads/click` before recording a click.
+- [x] Use the verified lease payload in `persist()` instead of re-parsing the
       token.
 - [ ] Add request-size limits and stricter schema bounds.
 - [ ] Add CSRF strategy if cookies are introduced (bearer-only today).
@@ -288,26 +309,29 @@ raw IPs.
       entries on failure.
 - [ ] Payout state machine transitions (`requested → auditing → approved → paid`
       or `rejected/frozen`) with audit log.
-- [ ] Campaign budget enforcement at telemetry time, not just prefetch.
+- [x] Campaign budget enforcement at telemetry time under a campaign row lock.
 - [ ] Handle campaign exhaustion (`spentTodayMicro >= dailyBudgetMicro`) by
       pausing/exhausting status.
 - [ ] Use `bigint`/string in prefetch `cpiMicro` to avoid future precision loss.
-- [ ] Fix campaign/variant moderation status transitions after human review.
-- [ ] Add uniqueness/idempotency for task submissions (one reward per post URL).
+- [x] Campaign/variant moderation status transitions after human review.
+- [x] Uniqueness/idempotency for task submissions (one live reward per post URL).
 
 ### Trust and safety
 
-- [ ] Reviewer/admin UI for campaigns (`needs_review` → active/rejected) and
-      tasks (`pending` → approved/rejected).
-- [ ] Payout review queue for `auditing` and `frozen` requests.
+- [x] Reviewer/admin UI and API for campaigns (`needs_review` → active/rejected),
+      variants, and tasks (`pending` → approved/rejected).
+- [x] Payout review queue for `auditing` and `frozen` requests, with refund on
+      rejection and debit-on-approval for frozen requests.
 - [ ] Appeal flow for rejected tasks and frozen payouts.
-- [ ] Store reviewer identity, notes, and timestamps.
-- [ ] Add an audit log for manual decisions.
+- [x] Store reviewer notes and timestamps. Per-reviewer accounts and a shared
+      operator key's member identity remain open.
+- [x] Audit log for manual decisions (`fraud_logs`).
 - [ ] Document fraud-rule thresholds and tuning process.
 
 ### Extension
 
-- [ ] Add `aria-label` to icon-only controls and a focus trap for the menu.
+- [x] Add `aria-label` to icon-only controls and Escape/outside-click menu close.
+- [ ] Add a focus trap for the menu.
 - [ ] Add a first-run explainer and permissions rationale.
 - [ ] Add an options page for API base, frequency, and placement.
 - [ ] Add a "report this ad" control.

@@ -134,15 +134,23 @@ It requires Python >=3.10, caches the checkpoint under
 `~/.local/share/meantime/hf`, and takes a few minutes on first run. Override
 `LAYA_PORT`, `LAYA_DEVICE`, or `HF_HOME` through the environment.
 
-Laya is text-only, so social-task screenshots are not analysed. A clean task
-link still goes to `needs_review` (`screenshot_unverified`) rather than being
-auto-approved; a scam or phishing link is rejected before review.
+Laya is text-only, so social-task screenshot contents are not analysed. The
+upload itself is checked first (the object must exist, be PNG/JPEG/WebP, and be
+at most 5 MB), but a clean task link still goes to `needs_review`
+(`screenshot_unverified`) rather than being auto-approved; a scam or phishing
+link is rejected before review.
 
 Security boundary: deterministic policy checks (blocked terms, malformed
 URLs) run *before* Laya and can hard-reject clear-cut abuse without consulting
 the model — and if Laya is slow or unreachable, the service fails safe to
 **"needs_review"**, never to auto-approve. A Laya outage can never push bad
 content live.
+
+Manual review lives at `/admin` in the web app. Set `ADMIN_API_KEY` on the API
+and enter it in the page; the queue covers campaigns, A/B variants, task proofs,
+and `auditing`/`frozen` payouts. Reviewer decisions are recorded in
+`fraud_logs`. Auth, ad, telemetry, task, payout, and reviewer endpoints are
+rate-limited, and refresh sessions rotate on every use.
 
 ## Geo targeting & analytics
 

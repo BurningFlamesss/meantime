@@ -454,14 +454,17 @@ store cluster + hash only; discard raw IP
 ## 7. API surface
 
 All routes are JSON. User routes require `Authorization: Bearer <token>`
-(`kind: "user"`); advertiser routes require `kind: "advertiser"`. There is
-currently no rate limiting.
+(`kind: "user"`); advertiser routes require `kind: "advertiser"`; reviewer
+routes require `x-admin-key`. Auth, prefetch, telemetry, payouts, clicks,
+tasks, and reviewer routes are rate-limited per IP/user.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | `GET` | `/health` | — | Liveness. |
 | `POST` | `/auth/register` | — | Create user, optional device, referral attribution, welcome bonus, token. |
 | `POST` | `/auth/login` | — | Verify Argon2 hash, upsert device, token. |
+| `POST` | `/auth/refresh` | — | Rotate a single-use refresh session. |
+| `POST` | `/auth/logout` | — | Revoke a refresh session. |
 | `POST` | `/ads/prefetch` | user | Pacing, targeting, lease issuance, A/B rotation. |
 | `POST` | `/telemetry/batch` | user | Validate and settle up to 50 impressions. |
 | `GET` | `/me/balance` | user | Available/pending/lifetime/threshold. |
@@ -478,11 +481,16 @@ currently no rate limiting.
 | `GET` | `/advertiser/campaigns/:id/analytics` | advertiser | Totals + per-geo breakdown. |
 | `POST` | `/advertiser/campaigns/:id/variants` | advertiser | Add moderated B/C variant (max 2). |
 | `GET` | `/advertiser/campaigns/:id/variants` | advertiser | Variants + per-variant stats. |
-| `POST` | `/ads/click` | user | Record a CTA click with geo cluster. |
+| `POST` | `/ads/click` | user | Verify the lease, then record an idempotent CTA click. |
+| `GET` | `/admin/queue` | admin key | Campaigns, variants, tasks, and payouts awaiting review. |
+| `POST` | `/admin/campaigns/:id/review` | admin key | Approve/reject a campaign; audited. |
+| `POST` | `/admin/variants/:id/review` | admin key | Approve/reject an A/B variant; audited. |
+| `POST` | `/admin/tasks/:id/review` | admin key | Resolve a task proof and pay once. |
+| `POST` | `/admin/payouts/:id/review` | admin key | Approve/reject a payout; rejection refunds an auditing debit. |
 
-**Missing auth endpoints:** there is no advertiser register/login route and no
-refresh-token endpoint. Seeded advertisers have a password hash but no way to
-exchange it for a token through the API yet.
+**Missing auth endpoints:** there is no advertiser register/login route yet.
+Seeded advertisers have a password hash but no way to exchange it for a token
+through the API.
 
 ---
 
@@ -516,7 +524,7 @@ erDiagram
 |---|---|---|
 | `users` | Earner accounts. | Unique email; Argon2 password hash; trust score; frozen flag. |
 | `devices` | Extension device identities. | Unique `(user_id, fingerprint_hash)`. |
-| `auth_sessions` | Refresh sessions. | Token hash + expiry + revoked; not yet rotated. |
+| `auth_sessions` | Refresh sessions. | Hashed token, expiry, revocation; rotated on every refresh. |
 | `user_network_events` | Geo/network fraud signal. | Unique `(user_id, ip_hash, seen_on)`; stores hash, not IP. |
 | `advertisers` | Advertiser accounts + balance. | Unique email; balance micro. |
 | `campaigns` | Ad copy, budget, bid, targeting, moderation. | Status enum; daily/total spend; geo/platform JSONB. |
@@ -548,9 +556,9 @@ erDiagram
   order.
 - Token: `base64url(payload) + "." + base64url(HMAC-SHA256(secret, payload))`.
 - TTL 12 hours; verification allows 120 s clock skew.
-- Single use: Redis `SET lease:consumed:{lid} <impressionId> NX EX 86400`,
-  backed by `ad_leases.consumed_at`. If Redis is unavailable, the code falls
-  through to the database check.
+- Single use: one conditional `UPDATE ad_leases SET consumed_at = now()
+  WHERE id = ? AND consumed_at IS NULL`; the database row is authoritative, so
+  lease enforcement works identically with or without Redis.
 - Server re-checks the token user against the authenticated user and the lease
   row before crediting.
 
@@ -560,10 +568,14 @@ erDiagram
 - Tokens are verified with `timingSafeEqual`.
 - Passwords use Argon2.
 - `requireUser` / `requireAdvertiser` enforce token kind.
-- **Gap:** no refresh-token rotation despite `auth_sessions` existing; refresh
-  tokens returned at register/login are random but not persisted or accepted.
-- **Gap:** no rate limiting, email verification, password reset, or account
-  lockout.
+- Refresh tokens are persisted as SHA-256 hashes in `auth_sessions` and
+  rotated in one transaction; presenting an already-rotated token fails with
+  `401`. Logout revokes the session.
+- Bounded in-process rate limits cover registration, login, refresh, prefetch,
+  telemetry, task submission, payout requests, clicks, and reviewer routes.
+- CORS accepts the configured web origin, loopback `localhost`/`127.0.0.1`
+  origins on any port, and extension origins.
+- **Gap:** no email verification, password reset, or account lockout.
 
 ### 9.3 Ledger integrity
 
@@ -579,8 +591,11 @@ erDiagram
 - Classifier timeout is 4 s; errors and non-2xx responses return `null`.
 - `null` always maps to `needs_review` with score 50.
 - Social tasks use a stricter auto-approve band (90).
-- **Gap:** no human review UI; `needs_review` campaigns sit in `draft` and tasks
-  in `pending`.
+- `needs_review` campaigns, variants, tasks, and audits are surfaced in
+  `/admin`; every decision is written to `fraud_logs` with the reviewer note.
+- Task proofs must exist in object storage, be PNG/JPEG/WebP, and be at most
+  5 MB before they can enter review; the image contents are still not
+  interpreted by the text-only classifier.
 
 ### 9.5 Extension safety
 
@@ -683,28 +698,25 @@ These are tracked as tasks in [TASKS.md](./TASKS.md).
 2. No extension onboarding/login; `identity` is never written by the UI.
 3. No advertiser register/login endpoint or UI.
 4. No referral landing route (`/r/:code`) or signup attribution UI.
-5. No human review/admin UI for `needs_review` content or frozen payouts.
-   Advertiser self-activation of unapproved campaigns is now blocked
-   (`409 moderation_required`), so such campaigns stay `draft` until a reviewer
-   clears them.
+5. No web sign-in or extension onboarding still means tokens must be supplied
+   manually for those surfaces; reviewer access is a shared operator key, not
+   per-reviewer accounts.
 6. No real payout processor; requests stop at `approved`/`auditing`.
-7. No automated tests (unit, integration, or Playwright).
-8. No rate limiting, CSRF protection for cookie-less bearer flows (not needed
-   yet), email verification, or password reset.
+7. No automated test suite in the repository (the verification runs used
+   standalone Playwright and Node scripts).
+8. CSRF protection is unnecessary for the bearer-only flow today; email
+   verification and password reset are not implemented.
 9. `users.signupIp` stores a raw IP; it should be removed/hashed.
-10. `auth_sessions` is unused; refresh tokens are not persisted.
-11. `POST /ads/click` parses the lease payload without verifying its signature.
-12. `persist()` re-parses the lease token to recover the lease id instead of
-    using the verified payload.
-13. Prefetch performs an N+1 query for variants and loads all active campaigns
+10. Prefetch performs an N+1 query for variants and loads all active campaigns
     before filtering in memory.
-14. Laya is a text model, so task-proof screenshots are never analysed; task
-    approval always needs a human (`screenshot_unverified`).
-15. The local `infra/laya-stub` is an offline protocol test double, not a
+11. Laya is a text model, so task-proof image contents are not interpreted;
+    upload existence/type/size are validated, but approval always needs a human
+    (`screenshot_unverified`).
+12. The local `infra/laya-stub` is an offline protocol test double, not a
     classifier; production must run the real upstream image.
-16. `@meantime/shared` is built output-linked, so a fresh clone must build
+13. `@meantime/shared` is built output-linked, so a fresh clone must build
     before starting production artifacts (Turbo handles this).
-17. Referral attribution rejects signups whose hashed IP overlaps the
+14. Referral attribution rejects signups whose hashed IP overlaps the
     referrer's, so a successful referral cannot be exercised from a single
     machine/egress IP.
 
@@ -724,7 +736,22 @@ the HF cache) on `127.0.0.1:8000`. The offline `/v1/systemone` test double on
 
 Verified:
 
-- `pnpm typecheck` and `pnpm build` pass for all four workspaces.
+- `pnpm typecheck` and `pnpm build` pass for all workspaces, uncached.
+- Auth: registration/login issue rotating refresh sessions; reuse of a rotated
+  token is rejected; logout revokes it; the register and login limits return
+  `429` at their bounds.
+- Reviewer: queue requires the operator key; campaign approval activates it;
+  repeated task approval is `409` after one credit; payout rejection refunds
+  the auditing debit; the ledger remains zero-sum.
+- The built extension was loaded in real Chromium (Playwright) against a
+  ChatGPT-shaped fixture: the ad mounted under the newly sent prompt, survived
+  a completed answer in persist mode, reached 5 s, queued telemetry, flushed
+  after server acceptance, and credited 55% of the bid.
+- Task proofs: a real presigned PUT was uploaded to an S3-compatible server and
+  accepted; missing, non-image, and >5 MB objects were rejected; reviewer
+  approval paid exactly once.
+- The reviewer UI loaded at both `localhost` and `127.0.0.1` origins and
+  rendered live queue rows after the loopback CORS fix.
 - `pnpm db:migrate` applies all 17 tables; `pnpm db:seed` inserts the demo
   advertiser and two active campaigns.
 - `POST /auth/register` and `/auth/login` return tokens; `/me/balance` starts at
@@ -766,15 +793,15 @@ Not verified:
 - `docker compose up` (no Docker binary; the sandbox has no root or Docker
   socket), so the container image itself and its `laya-models` volume remain
   unbuilt. The model was run from upstream source instead.
-- No real browser was available, so the extension was built and its manifest
-  inspected but not loaded into Chrome.
+- `docker compose up`: Docker is still unavailable. Object storage was
+  exercised with `s3rver`, an S3-compatible emulator, because MinIO no longer
+  publishes community server binaries (the old `dl.min.io` paths return 410).
 - Formal Laya accuracy/precision on a labelled benchmark. Prompt calibration
   used a small hand-written sample of clean ads and obvious fraud.
-- MinIO object upload (only presigned URL generation was tested).
-- The extension loaded unpacked in Chrome.
 - A successful referral attribution (same-IP rejection) and a payout above the
-  $5 threshold (no funded account).
-- Refresh-token persistence/rotation (not implemented).
+  $5 threshold to a real processor (no funded account / processor).
+- MinIO specifically (the protocol was verified against an S3-compatible
+  emulator); task-proof image *contents* are still reviewed by a human.
 
 Two bugs found during this run were fixed: BigInt money columns now serialize
 as decimal strings (the web client already types them as strings), and the

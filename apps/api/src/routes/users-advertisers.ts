@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { and, desc, eq, sql } from "drizzle-orm";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import {
   PAYOUT_THRESHOLD_USD,
@@ -34,6 +34,7 @@ import { computeTrustScore, verdictFor, logFraud } from "../fraud/trust.js";
 import { moderateCampaign, moderateTask } from "../moderation/laya.js";
 import { resolveGeo, clusterForIp } from "../geo.js";
 import { referralCodeFor } from "../referrals.js";
+import { rateLimit } from "../rate-limit.js";
 
 function s3(ctx: AppContext): S3Client {
   return new S3Client({
@@ -41,7 +42,45 @@ function s3(ctx: AppContext): S3Client {
     region: ctx.env.S3_REGION,
     credentials: { accessKeyId: ctx.env.S3_ACCESS_KEY, secretAccessKey: ctx.env.S3_SECRET_KEY },
     forcePathStyle: true,
+    // Newer SDKs add a CRC32 of the empty presign payload to the URL. A real
+    // upload then carries different bytes and storage rejects the checksum,
+    // so presigned PUTs must not pin a request checksum.
+    requestChecksumCalculation: "WHEN_REQUIRED",
   });
+}
+
+const MAX_PROOF_BYTES = 5 * 1024 * 1024;
+const PROOF_CONTENT_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+
+/**
+ * A presigned key only proves the client asked for a URL. Confirm the object
+ * was actually uploaded, is a plausible screenshot, and is bounded in size
+ * before a proof can enter the review queue. Storage being unreachable fails
+ * closed: an unverifiable proof must not look acceptable to a reviewer.
+ */
+async function verifyProofObject(
+  ctx: AppContext,
+  key: string,
+): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+  try {
+    const head = await s3(ctx).send(
+      new HeadObjectCommand({ Bucket: ctx.env.S3_BUCKET, Key: key }),
+    );
+    const size = head.ContentLength ?? 0;
+    const contentType = (head.ContentType ?? "").toLowerCase();
+    if (size <= 0) return { ok: false, status: 400, error: "proof_empty" };
+    if (size > MAX_PROOF_BYTES) return { ok: false, status: 400, error: "proof_too_large" };
+    if (!PROOF_CONTENT_TYPES.has(contentType)) {
+      return { ok: false, status: 400, error: "proof_not_an_image" };
+    }
+    return { ok: true };
+  } catch (error) {
+    const meta = (error as { $metadata?: { httpStatusCode?: number } }).$metadata;
+    if (meta?.httpStatusCode === 404 || (error as Error).name === "NotFound") {
+      return { ok: false, status: 400, error: "proof_missing" };
+    }
+    return { ok: false, status: 503, error: "proof_storage_unavailable" };
+  }
 }
 
 export async function userRoutes(app: FastifyInstance, ctx: AppContext) {
@@ -116,6 +155,7 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post("/tasks/submit", async (req, reply) => {
     const auth = requireUser(req, reply, ctx.env.JWT_SECRET);
     if (!auth?.userId) return;
+    if (!rateLimit(req, reply, "task_submit", 20, 3_600_000, auth.userId)) return;
     const body = taskSubmissionSchema.parse(req.body);
     const { screenshotKey } = body;
     // A presigned key is scoped to the uploader; reject keys from other users
@@ -123,6 +163,8 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext) {
     if (!screenshotKey.startsWith(`task-proofs/${auth.userId}/`)) {
       return reply.code(400).send({ error: "invalid_screenshot_key" });
     }
+    const proof = await verifyProofObject(ctx, screenshotKey);
+    if (!proof.ok) return reply.code(proof.status).send({ error: proof.error });
 
     const [user] = await ctx.db
       .select()
@@ -199,6 +241,7 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post("/payouts/request", async (req, reply) => {
     const auth = requireUser(req, reply, ctx.env.JWT_SECRET);
     if (!auth?.userId) return;
+    if (!rateLimit(req, reply, "payout_request", 5, 3_600_000, auth.userId)) return;
     const userId = auth.userId;
     const body = payoutRequestSchema.parse(req.body);
     const amountMicro = BigInt(body.amountMicro);
@@ -587,6 +630,7 @@ export async function advertiserRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post("/ads/click", async (req, reply) => {
     const auth = requireUser(req, reply, ctx.env.JWT_SECRET);
     if (!auth?.userId) return;
+    if (!rateLimit(req, reply, "ad_click", 60, 60_000, auth.userId)) return;
     const body = clickEventSchema.parse(req.body);
 
     // A click is only meaningful when it is signed by the server and belongs

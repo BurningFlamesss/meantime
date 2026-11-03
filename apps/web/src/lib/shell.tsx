@@ -7,6 +7,7 @@ const NAV = [
   { to: "/referrals", label: "Referrals" },
   { to: "/payouts", label: "Payouts" },
   { to: "/advertiser", label: "Advertisers" },
+  { to: "/admin", label: "Review" },
 ] as const;
 
 export function Shell({ children }: { children: ReactNode }) {

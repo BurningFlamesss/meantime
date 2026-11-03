@@ -7,6 +7,7 @@ import { authRoutes, adsRoutes } from "./routes/auth-ads.js";
 import { telemetryRoutes } from "./routes/telemetry.js";
 import { userRoutes, advertiserRoutes } from "./routes/users-advertisers.js";
 import { advertiserListRoutes } from "./routes/advertiser-list.js";
+import { adminRoutes } from "./routes/admin.js";
 
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -39,8 +40,18 @@ async function main(): Promise<void> {
     ),
   );
 
+  // Accept both loopback spellings in local development: a page served from
+  // 127.0.0.1 is a different origin than localhost and would otherwise fail
+  // every API call even though both reach the same server.
   await app.register(cors, {
-    origin: [env.WEB_ORIGIN, /chrome-extension:\/\//],
+    origin: (origin, cb) => {
+      if (!origin) return cb(null, true);
+      const allowed =
+        origin === env.WEB_ORIGIN ||
+        /^http:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin) ||
+        origin.startsWith("chrome-extension://");
+      cb(null, allowed);
+    },
     credentials: true,
   });
   await app.register(compress, { encodings: ["br", "gzip", "deflate"] });
@@ -53,6 +64,7 @@ async function main(): Promise<void> {
   await userRoutes(app, ctx);
   await advertiserRoutes(app, ctx);
   await advertiserListRoutes(app, ctx);
+  await adminRoutes(app, ctx);
 
   app.setErrorHandler((err: Error, _req, reply) => {
     if (err.name === "ZodError") {

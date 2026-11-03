@@ -16,6 +16,9 @@ interface Task {
   createdAt: string;
 }
 
+const PROOF_TYPES = ["image/png", "image/jpeg", "image/webp"];
+const MAX_PROOF_BYTES = 5 * 1024 * 1024;
+
 const TASK_TYPES = [
   { value: "x", label: "Share on X (Twitter)" },
   { value: "linkedin", label: "Share on LinkedIn" },
@@ -47,6 +50,14 @@ function Tasks() {
       setMessage("Please attach a screenshot.");
       return;
     }
+    if (!PROOF_TYPES.includes(file.type)) {
+      setMessage("Proofs must be PNG, JPEG, or WebP images.");
+      return;
+    }
+    if (file.size > MAX_PROOF_BYTES) {
+      setMessage("Proofs must be 5 MB or smaller.");
+      return;
+    }
     setBusy(true);
     setMessage(null);
     try {
@@ -54,12 +65,17 @@ function Tasks() {
         "/tasks/presign",
         { method: "POST", json: { contentType: file.type } },
       );
-      await fetch(uploadUrl, { method: "PUT", body: file, headers: { "Content-Type": file.type } });
+      const upload = await fetch(uploadUrl, {
+        method: "PUT",
+        body: file,
+        headers: { "Content-Type": file.type },
+      });
+      if (!upload.ok) throw new Error("Proof upload failed. Try a PNG, JPEG, or WebP under 5 MB.");
       await api("/tasks/submit", {
         method: "POST",
         json: { taskType, postUrl, screenshotKey: key },
       });
-      setMessage("Submitted — Laya reviews most proofs instantly.");
+      setMessage("Submitted — your proof is queued for review.");
       setPostUrl("");
       setFile(null);
       await refresh();
@@ -74,7 +90,7 @@ function Tasks() {
     <Shell>
       <PageHeader
         title="Task center"
-        description="Earn $0.10 per approved task. Most proofs are auto-moderated."
+        description="Earn $0.10 per approved task. Screenshot proofs get a quick human review."
       />
 
       <form onSubmit={submit} className="card-pad space-y-4">
@@ -95,7 +111,7 @@ function Tasks() {
 
         <div>
           <label className="label">Screenshot proof</label>
-          <input type="file" accept="image/*" required onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          <input type="file" accept="image/png,image/jpeg,image/webp" required onChange={(e) => setFile(e.target.files?.[0] ?? null)}
             className="block w-full text-sm text-neutral-500 file:mr-4 file:rounded-lg file:border-0 file:bg-neutral-100 file:px-4 file:py-2 file:text-sm file:font-medium file:text-neutral-900 hover:file:bg-neutral-200" />
         </div>
 

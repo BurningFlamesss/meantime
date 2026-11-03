@@ -17,11 +17,13 @@ import { analyzeCadence, type CadenceFinding } from "../fraud/cadence.js";
 import { logFraud } from "../fraud/trust.js";
 import { clusterForIp } from "../geo.js";
 import { maybeQualifyReferral } from "../referrals.js";
+import { rateLimit } from "../rate-limit.js";
 
 export async function telemetryRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post("/telemetry/batch", async (req, reply) => {
     const auth = requireUser(req, reply, ctx.env.JWT_SECRET);
     if (!auth?.userId) return;
+    if (!rateLimit(req, reply, "telemetry", 30, 60_000, auth.userId)) return;
     const userId = auth.userId;
 
     const batch = telemetryBatchSchema.parse(req.body);

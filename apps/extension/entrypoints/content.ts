@@ -173,6 +173,11 @@ class MeanTimeController {
 
   private async onPromptSubmitted(_source: TriggerSource): Promise<void> {
     if (this.inFlight || this.activeWidget) return; // one ad at a time
+    // Snapshot both anchors synchronously, before any await: a fast model can
+    // render a new answer while settings/storage is still being read, and a
+    // baseline captured afterwards would treat that answer as pre-existing.
+    const initialUserNode = this.adapter.findLatestUserMessage();
+    const initialAiNode = this.adapter.findLatestAiMessage();
     this.inFlight = true;
     try {
       const settings = await getSettings();
@@ -186,7 +191,6 @@ class MeanTimeController {
       // Wait briefly for the *new* sent prompt bubble to render. Resolving the
       // previous message's slot would anchor the ad under the wrong prompt.
       const viewport = performance.now();
-      const initialUserNode = this.adapter.findLatestUserMessage();
       const mountPoint = await this.waitForMountPoint(
         settings.placement,
         initialUserNode,
@@ -247,7 +251,7 @@ class MeanTimeController {
 
       this.pohi.reset();
       this.armWatchdogs(widget);
-      this.watchGeneration(widget);
+      this.watchGeneration(widget, initialAiNode);
     } finally {
       this.inFlight = false;
     }
@@ -315,10 +319,12 @@ class MeanTimeController {
    * the one present at submit time, so a previous completed answer cannot end
    * the ad instantly.
    */
-  private watchGeneration(widget: AdWidget): void {
-    const initial = this.adapter.findLatestAiMessage();
-    this.initialAiNode = initial;
-    const root = initial?.parentElement ?? document.querySelector<HTMLElement>("main");
+  private watchGeneration(widget: AdWidget, initialAiNode: HTMLElement | null): void {
+    // The baseline is the answer that existed at submit, not at mount. If the
+    // model already started replying while the ad was mounting, that new node
+    // is detected on the first check and counts as the AI mutation.
+    this.initialAiNode = initialAiNode;
+    const root = initialAiNode?.parentElement ?? document.querySelector<HTMLElement>("main");
     if (!root) return;
 
     const completeSelector = this.adapter.config.generationCompleteSelector;

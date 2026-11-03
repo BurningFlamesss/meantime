@@ -99,6 +99,10 @@ export const loginSchema = z.object({
   fingerprintHash: z.string().min(8).max(128).optional(),
 });
 
+export const refreshTokenSchema = z.object({
+  refreshToken: z.string().min(16).max(256),
+});
+
 export const taskSubmissionSchema = z.object({
   taskType: z.enum(["x", "linkedin", "reddit", "chrome_web_store", "other"]),
   postUrl: taskUrlSchema,

@@ -30,6 +30,8 @@ const envSchema = z.object({
   S3_REGION: z.string().default("us-east-1"),
   PORT: z.coerce.number().int().default(3001),
   WEB_ORIGIN: z.string().default("http://localhost:3000"),
+  /** Operator key for /admin/*. Unset disables the reviewer surface (503). */
+  ADMIN_API_KEY: z.string().min(16).optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
