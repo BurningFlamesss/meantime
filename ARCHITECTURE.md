@@ -102,13 +102,13 @@ compiled output. This is required for production Node execution and for
 | ORM | Drizzle ORM 0.38 + `node-postgres` | Typed SQL, explicit schema, migration generation. |
 | Database | PostgreSQL 16 | Relational integrity, transactions, JSONB, aggregate queries. |
 | Cache | Redis 7 (`ioredis`) | Optional cache; lease replay protection is enforced by the database, so a Redis outage cannot admit a replay or reject a valid lease. |
-| Object storage | S3-compatible (MinIO locally) | Presigned task-proof uploads. |
+| Object storage | S3-compatible (Adobe `s3mock` locally) | Presigned task-proof uploads. MinIO's community images are no longer published, so compose no longer depends on them. |
 | Web | React 19, TanStack Router/Start 1.x, Vite 8, Tailwind 3 | File routes, SSR, small client bundle, utility-first styling. |
 | Web production server | `srvx` | Serves the TanStack Start server entry plus static client assets. |
 | Auth | Custom HMAC-SHA256 bearer tokens | Simple, dependency-free, symmetric; 30-day TTL for users. |
 | Ad token | HMAC-SHA256 over canonical JSON (WebCrypto) | Works identically in extension, browser, and Node. |
 | Moderation | Local HTTP classifier ("Laya") + deterministic policy | Non-chat structured output; no third-party data egress. |
-| Infra | Docker Compose: Postgres, Redis, MinIO, Laya `laya-serve` | Reproducible local stack. |
+| Infra | Docker Compose: Postgres, Redis, s3mock, Laya `laya-serve` | Reproducible local stack. |
 
 ---
 
@@ -126,19 +126,20 @@ flowchart TB
   subgraph Compose
     PG[("postgres :5432")]
     RD[("redis :6379")]
-    MINIO[("minio :9000/:9001")]
+    S3[("s3mock :9000")]
     LAYA["laya-serve :8000<br/>(laya-stub :8080 optional)"]
   end
   WEBDEV --> APIDEV
   APIDEV --> PG
   APIDEV --> RD
-  APIDEV --> MINIO
+  APIDEV --> S3
   APIDEV --> LAYA
 ```
 
 - Web dev server: `http://localhost:3000`
 - API: `http://localhost:3001`
-- MinIO console: `http://localhost:9001` (`minio` / `minio123`)
+- Object storage (s3mock): `http://localhost:9000`, bucket `meantime`, any
+  credentials
 - Laya (`laya-serve`): `http://localhost:8000`
 - Offline moderation test double: `http://localhost:8080` (`--profile stub`)
 - Extension output: `apps/extension/.output/chrome-mv3`
@@ -171,7 +172,7 @@ API (`apps/api/.env`, loaded automatically by `loadEnv()` when present):
 | `LEASE_HMAC_SECRET` | yes, ≥16 chars | — | Signs ad leases. |
 | `JWT_SECRET` | yes, ≥16 chars | — | Signs bearer tokens (despite the name, not a JWT). |
 | `S3_BUCKET` | yes | — | Task-proof bucket. |
-| `S3_ENDPOINT` | yes | — | MinIO/S3 endpoint. |
+| `S3_ENDPOINT` | yes | — | S3-compatible endpoint (`http://localhost:9000` for s3mock). |
 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` | yes | — | Object storage credentials. |
 | `S3_REGION` | no | `us-east-1` | S3 client region. |
 | `PORT` | no | `3001` | API port. |
@@ -393,7 +394,7 @@ store cluster + hash only; discard raw IP
 | `validators.ts` | zod schemas for auth, prefetch, telemetry, campaigns, tasks, payouts, clicks. |
 | `crypto.ts` | WebCrypto base64url + HMAC-SHA256 lease signing/verification with timing-safe compare; SHA-256 hex. |
 | `platforms.ts` | Selector config per AI platform and hostname resolver. |
-| `db/schema.ts` | 17 Drizzle tables, enums, indexes, inferred row types. |
+| `db/schema.ts` | 18 Drizzle tables, enums, indexes, inferred row types. |
 | `db/index.ts` | `createDb()` returning a Drizzle client over a `pg.Pool`. |
 
 ### 6.2 `apps/extension`
@@ -431,6 +432,7 @@ store cluster + hash only; discard raw IP
 | `src/routes/telemetry.ts` | Batch ingestion, lease replay checks, PoHI/cadence, ledger credit, impression persistence. |
 | `src/routes/users-advertisers.ts` | Balance, transparency log, tasks, payouts, referrals, campaign CRUD/stats/analytics/variants, click tracking. |
 | `src/routes/advertiser-list.ts` | Advertiser campaign listing. |
+| `src/routes/advertiser-auth.ts` | Advertiser register/login, refresh rotation, logout revocation. |
 | `src/db/migrate.ts` / `seed.ts` | Migration runner and demo advertiser/campaign seed. |
 
 ### 6.4 `apps/web`
@@ -474,6 +476,10 @@ tasks, and reviewer routes are rate-limited per IP/user.
 | `GET` | `/tasks/mine` | user | Last 50 submissions. |
 | `POST` | `/payouts/request` | user | Threshold, uniqueness, trust audit, ledger debit. |
 | `GET` | `/me/referrals` | user | Code, link, counts, earned. |
+| `POST` | `/advertiser/register` | — | Create advertiser, token + refresh session. |
+| `POST` | `/advertiser/login` | — | Verify Argon2 hash, token + refresh session. |
+| `POST` | `/advertiser/refresh` | — | Rotate a single-use advertiser refresh session. |
+| `POST` | `/advertiser/logout` | — | Revoke an advertiser refresh session. |
 | `POST` | `/advertiser/campaigns` | advertiser | Create + moderate campaign. |
 | `GET` | `/advertiser/campaigns` | advertiser | List own campaigns. |
 | `POST` | `/advertiser/campaigns/:id/activate` | advertiser | Activate own campaign. |
@@ -488,15 +494,16 @@ tasks, and reviewer routes are rate-limited per IP/user.
 | `POST` | `/admin/tasks/:id/review` | admin key | Resolve a task proof and pay once. |
 | `POST` | `/admin/payouts/:id/review` | admin key | Approve/reject a payout; rejection refunds an auditing debit. |
 
-**Missing auth endpoints:** there is no advertiser register/login route yet.
-Seeded advertisers have a password hash but no way to exchange it for a token
-through the API.
+Advertiser access tokens live one hour and are backed by a persisted refresh
+session, so a portal session can be rotated and revoked. `/r/:code` is a web
+redirect into `/sign-up?ref=<code>`; registration is the only place the code is
+consumed.
 
 ---
 
 ## 8. Data model
 
-**17 tables.** Money is `bigint` micro-dollars (`$1.00 = 1_000_000`).
+**18 tables.** Money is `bigint` micro-dollars (`$1.00 = 1_000_000`).
 
 ```mermaid
 erDiagram
@@ -510,6 +517,7 @@ erDiagram
   users ||--o{ payout_destinations : owns
   users ||--o{ referrals : refers
   users ||--o{ referrals : referred
+  advertisers ||--o{ advertiser_sessions : has
   advertisers ||--o{ campaigns : runs
   campaigns ||--o{ campaign_variants : has
   campaigns ||--o{ ad_leases : leased
@@ -527,6 +535,7 @@ erDiagram
 | `auth_sessions` | Refresh sessions. | Hashed token, expiry, revocation; rotated on every refresh. |
 | `user_network_events` | Geo/network fraud signal. | Unique `(user_id, ip_hash, seen_on)`; stores hash, not IP. |
 | `advertisers` | Advertiser accounts + balance. | Unique email; balance micro. |
+| `advertiser_sessions` | Portal refresh sessions. | Hashed token, expiry, revocation; rotated on every refresh. |
 | `campaigns` | Ad copy, budget, bid, targeting, moderation. | Status enum; daily/total spend; geo/platform JSONB. |
 | `campaign_variants` | A/B/C creatives. | Independent moderation; share campaign budget. |
 | `referrals` | Attribution + vesting. | One row per referred user. |
@@ -671,8 +680,8 @@ erDiagram
 
 ## 13. Deployment notes
 
-- **Current compose** starts infrastructure only: PostgreSQL, Redis, MinIO
-  (+ bucket initializer), and the real Laya `laya-serve` container. API, web,
+- **Current compose** starts infrastructure only: PostgreSQL, Redis, s3mock
+  (bucket created on boot), and the real Laya `laya-serve` container. API, web,
   and extension run from the host via pnpm. `--profile stub` swaps Laya for the
   offline test double on `:8080`.
 - **Database migrations** live in `apps/api/drizzle` (generated and tracked).
@@ -686,6 +695,8 @@ erDiagram
 - **Extension** builds to `.output/chrome-mv3` and is loaded unpacked.
 - **No reverse proxy/TLS** is configured. Production needs TLS termination,
   secret management, backups, and a real object-storage bucket.
+- **Verification** is documented per service in `docs/VERIFY.md`; with the API
+  running, `pnpm smoke` checks the money and auth paths end to end.
 
 ---
 
@@ -693,18 +704,16 @@ erDiagram
 
 These are tracked as tasks in [TASKS.md](./TASKS.md).
 
-1. No advertiser register/login endpoint or UI.
-2. No referral landing route (`/r/:code`) or signup attribution UI.
-3. Reviewer access is a shared operator key, not per-reviewer accounts.
-4. No real payout processor; requests stop at `approved`/`auditing`.
-5. No automated test suite in the repository (the verification runs used
-   standalone Playwright and Node scripts).
-6. CSRF protection is unnecessary for the bearer-only flow today; email
+1. Reviewer access is a shared operator key, not per-reviewer accounts.
+2. No real payout processor; requests stop at `approved`/`auditing`.
+3. No unit/integration suite. `scripts/smoke.mjs` (`pnpm smoke`) covers the API
+   surface end to end; web and extension checks are still manual.
+4. CSRF protection is unnecessary for the bearer-only flow today; email
    verification and password reset are not implemented.
-7. `users.signupIp` stores a raw IP; it should be removed/hashed.
-8. Prefetch performs an N+1 query for variants and loads all active campaigns
+5. `users.signupIp` stores a raw IP; it should be removed/hashed.
+6. Prefetch performs an N+1 query for variants and loads all active campaigns
    before filtering in memory.
-9. Laya is a text model, so task-proof image contents are not interpreted;
+7. Laya is a text model, so task-proof image contents are not interpreted;
    upload existence/type/size are validated, but approval always needs a human
    (`screenshot_unverified`).
 10. The local `infra/laya-stub` is an offline protocol test double, not a
@@ -756,8 +765,8 @@ Verified:
   approval paid exactly once.
 - The reviewer UI loaded at both `localhost` and `127.0.0.1` origins and
   rendered live queue rows after the loopback CORS fix.
-- `pnpm db:migrate` applies all 17 tables; `pnpm db:seed` inserts the demo
-  advertiser and two active campaigns.
+- `pnpm db:migrate` applies all 18 tables (migrations `0000`–`0003`);
+  `pnpm db:seed` inserts the demo advertiser and two active campaigns.
 - `POST /auth/register` and `/auth/login` return tokens; `/me/balance` starts at
   the $1.00 pending welcome bonus.
 - `POST /ads/prefetch` issues signed leases with pacing info.
@@ -773,6 +782,17 @@ Verified:
   guard respond as expected.
 - Advertiser routes (campaign create/list/variants/stats/analytics) work when
   given a signed advertiser token. `POST /ads/click` records a click.
+- Advertiser auth: register/login issue a 1-hour access token plus a rotating
+  refresh session; a spent refresh token and a revoked one both return `401`;
+  the portal rotates on `401` and revokes on sign-out.
+- `pnpm smoke` (19/19 against the live API): advertiser sessions and token
+  scoping, a clean campaign `auto_approved` by the real checkpoint, a verified
+  5 s view paying 55%, referral attribution across two client networks, the
+  $1.00 vesting threshold, and the $0.50 referrer bonus.
+- `docker compose up -d` brings Postgres, Redis, s3mock and the Laya stub up
+  healthy; `pnpm db:migrate` and `pnpm db:seed` apply to the compose database,
+  and `pnpm smoke` passes 19/19 against it. A presigned `PUT` into s3mock is
+  accepted, `HeadObject` validates it, and `/tasks/submit` records the proof.
 - Moderation against the **real English checkpoint**: `GET /health` reports
   `loaded: ["english"]` on CPU; clean ad copy scores 92 and is `auto_approved`;
   crypto/prize/lottery scams score 0–36 and are `auto_rejected`; ambiguous
@@ -794,18 +814,16 @@ Verified:
 
 Not verified:
 
-- `docker compose up` (no Docker binary; the sandbox has no root or Docker
-  socket), so the container image itself and its `laya-models` volume remain
-  unbuilt. The model was run from upstream source instead.
-- `docker compose up`: Docker is still unavailable. Object storage was
-  exercised with `s3rver`, an S3-compatible emulator, because MinIO no longer
-  publishes community server binaries (the old `dl.min.io` paths return 410).
+- The real Laya **container image** build (10 GB PyTorch CPU base). Compose is
+  otherwise verified; the classifier was validated against the same upstream
+  tag run from source, and the stub covers the compose path.
 - Formal Laya accuracy/precision on a labelled benchmark. Prompt calibration
   used a small hand-written sample of clean ads and obvious fraud.
-- A successful referral attribution (same-IP rejection) and a payout above the
-  $5 threshold to a real processor (no funded account / processor).
-- MinIO specifically (the protocol was verified against an S3-compatible
-  emulator); task-proof image *contents* are still reviewed by a human.
+- A payout above the $5 threshold to a real processor (no funded account or
+  processor), and referral traffic from two genuine external networks (the
+  loopback source-binding test stands in for that).
+- Task-proof image *contents* are still reviewed by a human, because Laya is
+  text-only.
 
 Two bugs found during this run were fixed: BigInt money columns now serialize
 as decimal strings (the web client already types them as strings), and the

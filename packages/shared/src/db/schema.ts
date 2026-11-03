@@ -166,6 +166,26 @@ export const advertisers = pgTable(
   (t) => [uniqueIndex("advertisers_email_uidx").on(t.email)],
 );
 
+/**
+ * Refresh-token sessions for the advertiser portal. Advertiser tokens are
+ * short-lived and rotatable so a lost portal session can actually be revoked;
+ * only the hash of the refresh token is stored.
+ */
+export const advertiserSessions = pgTable(
+  "advertiser_sessions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    advertiserId: uuid("advertiser_id")
+      .notNull()
+      .references(() => advertisers.id, { onDelete: "cascade" }),
+    refreshTokenHash: text("refresh_token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("advertiser_sessions_advertiser_idx").on(t.advertiserId)],
+);
+
 export const campaigns = pgTable(
   "campaigns",
   {

@@ -17,8 +17,9 @@ prompt and the AI's response — with 55% of ad spend going to the user.
 ```bash
 pnpm install
 
-# 1. Local infrastructure: postgres, redis, minio (+ bucket), Laya classifier.
-# The first run builds Laya (PyTorch CPU) and downloads its checkpoint.
+# 1. Local infrastructure: postgres, redis, s3mock (S3-compatible storage),
+# Laya classifier. The first run builds Laya (PyTorch CPU, ~10 GB) and
+# downloads its checkpoint (~800 MB).
 docker compose up -d
 
 # 2. API environment + database (migrations are committed under apps/api/drizzle)
@@ -40,10 +41,25 @@ First run is self-service: click the extension icon and create an account (or
 sign in) in the popup. No storage edits or devtools are needed. The web app has
 the same flow at `/sign-up` and `/sign-in`; both share the API account.
 
-Advertisers use a separate account and token: `/advertiser` shows its own
-sign-up/sign-in gate. The seeded demo advertiser is `demo@advertiser.test` /
+Advertisers use a separate account: `/advertiser` shows its own sign-up/sign-in
+gate, backed by a 1-hour access token and a rotating refresh session that is
+revoked on sign-out. The seeded demo advertiser is `demo@advertiser.test` /
 `demo-advertiser-pass-123`. Referral links (`/r/<code>`) land on sign-up with
 the code attached.
+
+## Verifying
+
+`docs/VERIFY.md` walks through every service (Postgres, Redis, s3mock, Laya,
+API, web, extension) plus the money and privacy invariants. With the API
+running:
+
+```bash
+pnpm smoke   # advertiser sessions, moderation, 55% payout, referral vesting
+```
+
+It registers throwaway accounts, so point it at a dev database only. An
+environment limit — such as the register rate limit after several runs in ten
+minutes — is reported as `SKIP`, not as a pass.
 
 ## The 3-pillar extension engine
 

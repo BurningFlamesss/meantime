@@ -13,11 +13,12 @@ private beta · P2 = post-launch / polish
 |---|---|---|
 | Shared contracts, schema, crypto, selectors | `[x]` | `pnpm typecheck` + `pnpm build` pass. |
 | Fastify API and fraud engine | `[x]` verified | Against PostgreSQL 18: register/login, prefetch, telemetry (verified, replay, forged lease, low PoHI, below threshold), balance, impressions, referrals, tasks presign, payouts threshold, advertiser create/list/variants/stats/analytics/click. |
-| TanStack Start web app | `[x]` verified | Production SSR bundle serves all routes with 200. `/sign-up`, `/sign-in`, dashboard, sign-out, and sign-in-again passed 7/7 in Chromium. Advertiser sign-up/sign-in and `/r/:code` referral attribution added. |
+| TanStack Start web app | `[x]` verified | Production SSR bundle serves all routes with 200. `/sign-up`, `/sign-in`, dashboard, sign-out, and sign-in-again passed 7/7 in Chromium. Advertiser sign-up/sign-in with rotating sessions, and `/r/:code` attribution. |
+| API smoke suite | `[x]` exists | `pnpm smoke` covers advertiser sessions, moderation, the 55% payment, and referral attribution + vesting. |
 | WXT extension | `[x]` verified | `.output/chrome-mv3` builds (185.5 KB; 94 KB content, 74 KB worker, 9 KB popup) and was loaded in real Chromium: first-run popup sign-up, prefetch, ad injection, 5 s payment, reload persistence, and sign-out all passed 19/19. |
-| Database migrations | `[x]` applied | `apps/api/drizzle/0000_uneven_tag.sql`, 17 tables, applied to PostgreSQL 18. |
+| Database migrations | `[x]` applied | `apps/api/drizzle/0000`–`0003`, 18 tables, applied to PostgreSQL 18. |
 | Demo seed | `[x]` run | 1 advertiser + 2 active campaigns inserted. |
-| Docker compose | `[!]` not run | Docker is not installed in the authoring environment (no root, no Docker socket). Verified with an embedded PostgreSQL + host-run Laya instead. |
+| Docker compose | `[x]` verified | Postgres 16, Redis 7, s3mock and the Laya stub run healthy in compose; migrations + seed apply to it and `pnpm smoke` passes 19/19. The real Laya image build is still unverified. |
 | Laya moderation | `[x]` real model | The pinned upstream `v0.4.21` `laya-serve` was run from source with CPU torch and the English checkpoint on `:8000`. Clean copy → 92/`auto_approved`, crypto/prize scams → 0–36/`auto_rejected`, clean task link → `needs_review`. The Docker image itself is still unbuilt. |
 | Automated tests | `[ ]` | No test suite exists. |
 | Auth/onboarding UX | `[x]` | Web sign-up/sign-in/sign-out and first-run popup onboarding work without manual storage edits. |
@@ -91,6 +92,14 @@ private beta · P2 = post-launch / polish
       the viewer token.
 - [x] `/r/:code` referral landing that forwards the code to `/sign-up?ref=`
       and attributes it at registration.
+- [x] Advertiser sessions: 1-hour access token plus a rotating refresh token
+      (`advertiser_sessions`, migration `0003`), `POST /advertiser/refresh`
+      (single-use rotation) and `POST /advertiser/logout` (revocation). The
+      portal rotates on 401 and revokes on sign-out.
+- [x] `scripts/smoke.mjs` (`pnpm smoke`): advertiser auth, token scoping,
+      moderation, 55% payment, referral attribution and vesting.
+- [x] `docs/VERIFY.md`: how to verify every service plus the money and privacy
+      invariants.
 - [x] Shared UI primitives and design tokens.
 
 ### Build, tooling, and docs
@@ -116,7 +125,9 @@ private beta · P2 = post-launch / polish
       pinned to upstream `v0.4.21`.
 - [x] Reworked `infra/laya-stub` into an offline test double that speaks the
       same `/v1/systemone` protocol (it is not a model).
-- [x] Added MinIO bucket initializer.
+- [x] Object storage in compose. MinIO's community images are no longer
+      published, so the stack uses Adobe `s3mock` (bucket created on boot), and
+      presigned uploads were verified against it.
 - [x] Applied migrations and seed to a real PostgreSQL 18 instance.
 - [x] Fixed API 500 when serializing BigInt money columns (global string
       serializer; matches the web client's `string` types).
@@ -228,8 +239,9 @@ popup reload, and sign-out clears the session and cache.
 - [x] `POST /advertiser/register` and `POST /advertiser/login`.
 - [x] Argon2 verification and `kind: "advertiser"` token.
 - [x] Web advertiser sign-in/up form.
-- [x] Persist advertiser token separately from the user token
-      (`localStorage["mt_advertiser_token"]`).
+- [x] Persist the advertiser session separately from the viewer token
+      (`localStorage["mt_advertiser_session"]`), rotate the 1-hour access token
+      with the stored refresh token, and revoke the session on sign-out.
 - [x] Gate `/advertiser` behind advertiser auth; a rejected token returns to
       the form.
 
@@ -249,39 +261,37 @@ referrer sees a pending referral in `/me/referrals`.
 
 ### T-05 · Run and validate Docker compose
 
-- [x] Compose file defines Postgres, Redis, MinIO, bucket init, and the real
-      Laya `laya-serve` service with healthchecks.
+- [x] Compose file defines Postgres, Redis, s3mock, and the real Laya
+      `laya-serve` service with healthchecks.
 - [x] Laya integration uses upstream's `POST /v1/systemone` contract.
 - [x] Offline test double under `--profile stub` speaks the same contract.
-- [ ] `docker compose up -d` starts all services healthy.
-- [!] The Laya container image was not built; the same upstream tag was
-      installed and run natively instead (see above).
-- [x] `pnpm db:migrate` succeeds against a real PostgreSQL 18 instance
-      (embedded fallback, not compose).
-- [x] `pnpm db:seed` inserts the demo advertiser and two campaigns.
-- [ ] A document exists describing how to verify each service.
-- [x] Object upload path verified end to end with `s3rver` (an S3-compatible
-      emulator): presigned PUT, HeadObject validation, task submit, and
-      reviewer payment. MinIO itself was not run because community server
-      binaries are no longer published (old download paths return 410).
+- [x] `docker compose up -d` starts Postgres, Redis, s3mock, and laya-stub
+      healthy (verified on a Docker-capable host).
+- [x] `pnpm db:migrate` and `pnpm db:seed` succeed against the compose
+      PostgreSQL 16 instance, and `pnpm smoke` passes 19/19 against it.
+- [!] The Laya container image itself (10 GB PyTorch CPU) is still unbuilt; the
+      same upstream tag was run from source, and the stub covers compose.
+- [x] `docs/VERIFY.md` describes how to verify each service.
+- [x] Object upload path verified end to end against s3mock: presigned PUT,
+      HeadObject validation, and task submit.
+- [x] MinIO replaced: its community images are no longer published
+      (`docker.io/minio/minio` reports the repository does not exist, and
+      `quay.io/minio/minio` answers 401).
 
 **Acceptance:** from a clean machine with Docker, the documented commands bring
 up infra and seed data without manual edits.
 
-### T-06 · End-to-end smoke script
+### T-06 · End-to-end smoke script · partial
 
-- [ ] `scripts/smoke.mjs` (or shell) that:
-  - registers a user with a device,
-  - prefetches ads,
-  - crafts a signed lease test event? *No — do not hand-craft production
-    telemetry; use the extension.*
-  - verifies `/me/balance` and `/me/impressions`,
-  - creates an advertiser via seeded login (after T-03),
-  - creates a campaign and reads analytics.
-- [ ] Prefer a Playwright test for the web flow and a manual checklist for the
-      extension.
+- [x] `scripts/smoke.mjs` (`pnpm smoke`): registers accounts, prefetches a real
+      lease, submits a real telemetry batch, and asserts the 55% payment.
+- [x] Covers advertiser register/login/refresh/logout, token scoping, campaign
+      creation through moderation, referral attribution and vesting.
+- [ ] Playwright coverage for the web flow; the extension stays manual.
 
-**Acceptance:** one command reports pass/fail for the API + web surfaces.
+**Acceptance:** met for the API surface. `pnpm smoke` reports pass/fail per
+check and exits non-zero on failure; an environment limit (the register rate
+limit) is reported as `SKIP`, never as a pass.
 
 ### T-07 · Privacy cleanup
 
@@ -432,7 +442,7 @@ separate token kind, plus a portal sign-in gate. | — | — |
 | B-11 | ~~Referrer lookup used `pgcrypto.digest`.~~ Fixed: uses core `sha256(convert_to(...))`. | — | — |
 | B-12 | `@meantime/shared` exports build output, so a fresh production start requires a build. | Confusing failure if run directly. | Documented; keep Turbo ordering. |
 | B-13 | No Docker available in the authoring environment. | Compose unverified. | Run T-05 on a Docker-capable machine. |
-| B-14 | Referral attribution rejects same-IP signups (`ip_overlap_with_referrer`). | Cannot exercise a successful referral on a single machine. | Test with distinct egress IPs, or add an explicit dev override. |
+| B-14 | Referral attribution rejects same-IP signups (`ip_overlap_with_referrer`). | A referral cannot be exercised from a single client IP — by design. | Testable without weakening it: `pnpm smoke` binds a distinct loopback source address (`localAddress`), because the kernel otherwise always picks 127.0.0.1 as the source. |
 | B-15 | Laya is text-only; task screenshots are never analysed. | Task proofs always need a human (`screenshot_unverified`). | Add an image-capable classifier or a reviewer UI. |
 | B-16 | Real Laya was run from source, but the container image is still unbuilt (no Docker). | Compose and the `laya-models` volume are unverified. | Run T-05 on a Docker-capable machine. |
 | B-17 | The real checkpoint is poorly calibrated for yes/no moderation questions; the original `noul` set scored every ad as spam. Fixed with a `choice` category question (see §1). | Clean copy can still land in `needs_review` (e.g. copy that mentions earning money, or an advertiser with prior rejections). | Build the evaluation harness in P2 before tuning the 85/40 bands. |
@@ -452,7 +462,8 @@ A demo is considered working when:
 - [ ] The dashboard shows the impression and the balance increases.
 - [x] An advertiser can sign in, create a campaign, and see analytics.
 - [x] A referral link lands on sign-up with the code and is attributed at
-      registration (subject to the self-referral network check).
+      registration (subject to the self-referral network check). Verified by
+      `pnpm smoke`: attribution, $1.00 vesting, and the $0.50 bonus posted.
 - [ ] A payout request is gated by $5.00 and returns a trust verdict.
 - [ ] No raw IP or prompt text is stored.
 - [ ] `pnpm typecheck` and `pnpm build` pass.

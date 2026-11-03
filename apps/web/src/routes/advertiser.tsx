@@ -10,9 +10,10 @@ import {
   ApiError,
   api,
   apiAsAdvertiser,
-  clearAdvertiserToken,
+  clearAdvertiserSession,
   getAdvertiserToken,
-  setAdvertiserToken,
+  revokeAdvertiserSession,
+  setAdvertiserSession,
 } from "../lib/api";
 import { formatMicroCents, formatMs } from "../lib/format";
 import { Shell, PageHeader } from "../lib/shell";
@@ -88,7 +89,7 @@ function AdvertiserAuth({ onAuthed }: { onAuthed: () => void }) {
     setError(null);
     setBusy(true);
     try {
-      const res = await api<{ accessToken: string }>(
+      const res = await api<{ accessToken: string; refreshToken: string }>(
         registering ? "/advertiser/register" : "/advertiser/login",
         {
           method: "POST",
@@ -97,7 +98,10 @@ function AdvertiserAuth({ onAuthed }: { onAuthed: () => void }) {
             : { email: email.trim().toLowerCase(), password },
         },
       );
-      setAdvertiserToken(res.accessToken);
+      setAdvertiserSession({
+        accessToken: res.accessToken,
+        refreshToken: res.refreshToken,
+      });
       setPassword("");
       onAuthed();
     } catch (err) {
@@ -203,7 +207,7 @@ function AdvertiserPortalContent({ onSignedOut }: { onSignedOut: () => void }) {
   /** A rejected advertiser token returns the portal to its sign-in form. */
   function handleAuthFailure(err: unknown): void {
     if (err instanceof ApiError && err.status === 401) {
-      clearAdvertiserToken();
+      clearAdvertiserSession();
       onSignedOut();
     }
   }
@@ -308,8 +312,7 @@ function AdvertiserPortalContent({ onSignedOut }: { onSignedOut: () => void }) {
         />
         <button
           onClick={() => {
-            clearAdvertiserToken();
-            onSignedOut();
+            void revokeAdvertiserSession().finally(onSignedOut);
           }}
           className="btn-outline shrink-0 text-xs"
         >

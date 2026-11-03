@@ -25,31 +25,25 @@ services:
       timeout: 5s
       retries: 15
 
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
+  # S3-compatible object storage for task proofs. MinIO's community images are
+  # no longer published (docker.io/minio/minio returns "repository does not
+  # exist" and quay.io/minio/minio answers 401), so the local stack uses Adobe's
+  # S3 mock. It implements the subset the API needs: an initial bucket,
+  # PutObject, HeadObject, and presigned GET/PUT. The API talks path-style S3,
+  # so pointing S3_ENDPOINT at http://localhost:9000 requires no code change.
+  s3mock:
+    image: adobe/s3mock:latest
     environment:
-      MINIO_ROOT_USER: minio
-      MINIO_ROOT_PASSWORD: minio123
+      # Created on boot, matching S3_BUCKET in apps/api/.env.
+      COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS: meantime
+      COM_ADOBE_TESTING_S3MOCK_STORE_REGION: us-east-1
     ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - miniodata:/data
-
-  # Creates the task-proof bucket once MinIO is reachable, then exits.
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      - minio
-    entrypoint: >
-      /bin/sh -c "
-      until /usr/bin/mc alias set local http://minio:9000 minio minio123; do sleep 1; done;
-      /usr/bin/mc mb --ignore-existing local/meantime;
-      /usr/bin/mc anonymous set none local/meantime;
-      echo 'minio bucket ready';
-      "
-    restart: "no"
+      # The container listens on 9090; 9000 keeps the documented S3_ENDPOINT.
+      - "9000:9090"
+    # No healthcheck: the image ships no shell or HTTP client, and a probe that
+    # cannot run would report the service unhealthy while it is serving fine.
+    # The bucket is created on boot, and the API surfaces storage failures as
+    # `proof_storage_unavailable`.
 
   # Real Laya inference server: TypeSafe Jev-compatible POST /v1/systemone.
   # Built from the pinned upstream tag. The first build is large (PyTorch CPU)
@@ -98,7 +92,9 @@ services:
     ports:
       - "8080:8080"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      # 127.0.0.1, not localhost: Alpine resolves localhost to ::1 first and
+      # the stub binds IPv4 only, which made every probe fail.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -106,5 +102,4 @@ services:
 
 volumes:
   pgdata:
-  miniodata:
   laya-models:

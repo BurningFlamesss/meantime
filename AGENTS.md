@@ -331,7 +331,9 @@ before relying on the related flow:
 
 - Reviewer access is a shared operator key, not per-reviewer accounts.
 - No payout processor settlement.
-- No automated tests in the repository.
+- No unit/integration test suite. `scripts/smoke.mjs` (`pnpm smoke`) covers the
+  API surface end to end (advertiser sessions, moderation, payment, referral
+  vesting); web and extension checks are still manual.
 - Task-proof image contents are not analysed by the text-only Laya model; only
   upload existence/type/size is validated, so approval still needs a human.
 - `users.signupIp` stores a raw IP (legacy).

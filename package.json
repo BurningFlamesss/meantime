@@ -12,7 +12,8 @@
     "clean": "turbo run clean",
     "db:generate": "pnpm --filter @meantime/api db:generate",
     "db:migrate": "pnpm --filter @meantime/api db:migrate",
-    "db:seed": "pnpm --filter @meantime/api db:seed"
+    "db:seed": "pnpm --filter @meantime/api db:seed",
+    "smoke": "node scripts/smoke.mjs"
   },
   "devDependencies": {
     "prettier": "^3.4.2",

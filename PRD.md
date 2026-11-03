@@ -380,7 +380,8 @@ MeanTime should feel like a quiet utility, not an ad network:
 ### 10.4 Dependencies
 
 - Chrome Manifest V3 extension APIs (`storage`, `alarms`, `idle`).
-- PostgreSQL 16, Redis 7, S3-compatible object storage (MinIO locally).
+- PostgreSQL 16, Redis 7, S3-compatible object storage (s3mock locally, since
+  MinIO's community images are no longer published).
 - A moderation classifier reachable at `LAYA_ENDPOINT`: open-source Laya,
   served by `laya-serve` over TypeSafe Jev's `POST /v1/systemone`
   (a deterministic offline test double is included for development).
@@ -408,8 +409,9 @@ MeanTime should feel like a quiet utility, not an ad network:
 ## 12. Release criteria for v0.1 demo
 
 - [ ] `pnpm install`, `pnpm typecheck`, and `pnpm build` pass from a clean clone.
-- [ ] `docker compose up -d` starts Postgres, Redis, MinIO (+ bucket), and the
-      real Laya `laya-serve` classifier.
+- [x] `docker compose up -d` starts Postgres, Redis, and S3-compatible storage
+      (s3mock, bucket created on boot).
+- [ ] The real Laya `laya-serve` container image builds and serves `/health`.
 - [ ] Migrations apply and demo campaigns seed successfully.
 - [ ] API `/health` returns 200.
 - [ ] Web app renders the landing page and all five routes.
