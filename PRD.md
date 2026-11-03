@@ -178,9 +178,11 @@ MeanTime should feel like a quiet utility, not an ad network:
 1. User chooses a task type (X, LinkedIn, Reddit, Chrome Web Store, other),
    submits a post URL, and uploads a screenshot proof.
 2. The screenshot is uploaded via a presigned S3/MinIO URL.
-3. Policy checks validate the URL shape; the proof image and URL are classified.
-4. Auto-approved tasks pay **$0.10** immediately. Middle-band proofs wait for a
-   reviewer. Rejected proofs earn nothing.
+3. Policy checks validate the URL shape; the URL is classified for
+   scam/phishing signals. Laya is text-only, so the screenshot is not analysed.
+4. A clearly fraudulent link is rejected. Because the screenshot is unverified,
+   a clean link still goes to a human reviewer rather than auto-approving.
+   Rejected proofs earn nothing.
 
 ### 6.5 Payout
 
@@ -371,16 +373,17 @@ MeanTime should feel like a quiet utility, not an ad network:
 - 5 seconds of active attention is a fair unit of value.
 - A 55/45 split is sustainable at the target bid levels.
 - Coarse geo clusters are sufficient for early advertiser targeting.
-- A local classifier can moderate text ads and proof screenshots with acceptable
-  accuracy; humans handle the middle band.
+- The local text classifier can moderate ad copy and task links with acceptable
+  accuracy; humans handle the middle band and verify proof screenshots.
 - Advertisers will fund campaigns manually until billing is built.
 
 ### 10.4 Dependencies
 
 - Chrome Manifest V3 extension APIs (`storage`, `alarms`, `idle`).
 - PostgreSQL 16, Redis 7, S3-compatible object storage (MinIO locally).
-- A moderation classifier reachable at `LAYA_ENDPOINT`
-  (a development stub is included; production must supply a real model).
+- A moderation classifier reachable at `LAYA_ENDPOINT`: open-source Laya,
+  served by `laya-serve` over TypeSafe Jev's `POST /v1/systemone`
+  (a deterministic offline test double is included for development).
 - A payout processor for actual settlement (not yet integrated).
 - AI platform DOM selectors, which change without notice.
 
@@ -406,7 +409,7 @@ MeanTime should feel like a quiet utility, not an ad network:
 
 - [ ] `pnpm install`, `pnpm typecheck`, and `pnpm build` pass from a clean clone.
 - [ ] `docker compose up -d` starts Postgres, Redis, MinIO (+ bucket), and the
-      moderation stub.
+      real Laya `laya-serve` classifier.
 - [ ] Migrations apply and demo campaigns seed successfully.
 - [ ] API `/health` returns 200.
 - [ ] Web app renders the landing page and all five routes.
@@ -426,13 +429,15 @@ MeanTime should feel like a quiet utility, not an ad network:
 
 ## 13. Open questions
 
-1. Which real classifier replaces the development Laya stub, and what is its
-   latency/cost envelope?
-2. Should the 55% share be fixed or vary by campaign tier?
-3. What is the minimum viable payout processor, and in which jurisdictions?
-4. Is a server-patchable selector config endpoint worth the added attack surface?
-5. Should power users be able to opt into a higher ad frequency for more
+1. How should task screenshots be verified, given Laya is text-only? Is a
+   second image classifier or a human reviewer the right answer?
+2. What is the latency/cost envelope of running Laya checkpoints in production
+   (cold start, checkpoint size, CPU vs GPU)?
+3. Should the 55% share be fixed or vary by campaign tier?
+4. What is the minimum viable payout processor, and in which jurisdictions?
+5. Is a server-patchable selector config endpoint worth the added attack surface?
+6. Should power users be able to opt into a higher ad frequency for more
    earnings, or does that undermine the "quiet" promise?
-6. How long should impression and fraud data be retained?
-7. What is the appeal path for a frozen payout or rejected task?
-8. Do advertisers need impression-level reporting, or are aggregates sufficient?
+7. How long should impression and fraud data be retained?
+8. What is the appeal path for a frozen payout or rejected task?
+9. Do advertisers need impression-level reporting, or are aggregates sufficient?

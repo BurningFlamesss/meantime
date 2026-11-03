@@ -32,7 +32,7 @@ flowchart LR
     PG[("PostgreSQL 16<br/>Drizzle schema")]
     RD[("Redis 7<br/>lease replay / pacing")]
     S3[("S3 / MinIO<br/>task proofs")]
-    LAYA["Laya classifier<br/>POST /v1/classify"]
+    LAYA["Laya classifier<br/>laya-serve · POST /v1/systemone"]
   end
 
   AI["AI platforms<br/>ChatGPT · Gemini · Claude<br/>Grok · DeepSeek"]
@@ -72,7 +72,7 @@ flowchart LR
 | `apps/api` | `@meantime/api` | Fastify API, auth, prefetch/lease issuance, telemetry ingestion, ledger, payouts, referrals, moderation, fraud engine, S3 presigning. |
 | `apps/web` | `@meantime/web` | TanStack Start/React app: landing, dashboard, tasks, referrals, payouts, advertiser portal. |
 | `apps/extension` | `@meantime/extension` | WXT Manifest V3 extension: background worker, content script, popup, adapters, widget, timers, local storage. |
-| `infra/laya-stub` | (dev only) | Dependency-free Node HTTP stand-in for the Laya classifier so local Docker compose works. |
+| `infra/laya-stub` | (dev only) | Dependency-free Node test double that speaks Laya's `/v1/systemone` protocol for offline development. Not a model. |
 | root | — | Turbo pipeline, pnpm workspace, Drizzle config, Docker compose, docs. |
 
 ### Workspace dependency graph
@@ -108,7 +108,7 @@ compiled output. This is required for production Node execution and for
 | Auth | Custom HMAC-SHA256 bearer tokens | Simple, dependency-free, symmetric; 30-day TTL for users. |
 | Ad token | HMAC-SHA256 over canonical JSON (WebCrypto) | Works identically in extension, browser, and Node. |
 | Moderation | Local HTTP classifier ("Laya") + deterministic policy | Non-chat structured output; no third-party data egress. |
-| Infra | Docker Compose: Postgres, Redis, MinIO, moderation stub | Reproducible local stack. |
+| Infra | Docker Compose: Postgres, Redis, MinIO, Laya `laya-serve` | Reproducible local stack. |
 
 ---
 
@@ -127,7 +127,7 @@ flowchart TB
     PG[("postgres :5432")]
     RD[("redis :6379")]
     MINIO[("minio :9000/:9001")]
-    LAYA["laya-stub :8080"]
+    LAYA["laya-serve :8000<br/>(laya-stub :8080 optional)"]
   end
   WEBDEV --> APIDEV
   APIDEV --> PG
@@ -139,7 +139,8 @@ flowchart TB
 - Web dev server: `http://localhost:3000`
 - API: `http://localhost:3001`
 - MinIO console: `http://localhost:9001` (`minio` / `minio123`)
-- Moderation stub: `http://localhost:8080`
+- Laya (`laya-serve`): `http://localhost:8000`
+- Offline moderation test double: `http://localhost:8080` (`--profile stub`)
 - Extension output: `apps/extension/.output/chrome-mv3`
 
 ### 4.2 Production-shaped local run
@@ -321,17 +322,35 @@ column. This prevents drift but makes balance reads aggregate queries.
 flowchart LR
   IN["Campaign copy / task proof"] --> POL["Policy scan<br/>blocked terms · URL · TLD · repetition"]
   POL -->|hard reject| REJ["auto_rejected"]
-  POL -->|pass| LAYA["POST /v1/classify<br/>{task,text,url,imageKey}"]
+  POL -->|pass| LAYA["POST /v1/systemone<br/>{state: {post}, questions: shape · severity}"]
   LAYA -->|unreachable/timeout| REV["needs_review<br/>score 50"]
-  LAYA -->|score| ADJ["reputation adjustment<br/>prior rejects · new advertiser · approvals"]
+  LAYA -->|answers| MAP["choice category<br/>P(fraud) + 0.5·P(deceptive) → 0–100"]
+  MAP --> ADJ["reputation adjustment<br/>prior rejects · new advertiser · approvals"]
   ADJ --> DEC{"score bands"}
-  DEC -->|">=85, tasks >=90"| APP["auto_approved"]
+  DEC -->|">=85"| APP["auto_approved"]
   DEC -->|"<40"| REJ
   DEC -->|"40–84"| REV
 ```
 
 Policy checks are authoritative for clear abuse and do not call the model.
 Reputation can nudge a score at the margins but cannot rescue bad content.
+
+Laya answers one `choice` question over four mutually exclusive categories
+(`legitimate_ad`, `low_quality`, `deceptive`, `fraud`) plus a severity `score`.
+Risk is `P(fraud) + 0.5·P(deceptive)`. The alternative — a `noul` per offence
+("Is this advertisement spam?") — is not usable against the real checkpoint: it
+answers ~1.0 for any advertisement because an ad is, by definition, an
+advertisement.
+
+Task links use a second `choice` over `normal` / `promo` / `phishing` /
+`fraud`, with risk `1.15·(P(phishing) + P(fraud))`. Promo links and the
+severity head are not risk inputs for tasks: ordinary social URLs are commonly
+promotional, and the severity head rates them "minor".
+
+Laya is a text classifier, so the task path sends the claimed post URL rather
+than the screenshot. It can reject an obvious phishing/scam link, but a clean
+link still stops at `needs_review` with `screenshot_unverified`; there is no
+automatic approval of task proofs.
 
 ### 5.6 Geo and privacy flow
 
@@ -632,10 +651,12 @@ erDiagram
 ## 13. Deployment notes
 
 - **Current compose** starts infrastructure only: PostgreSQL, Redis, MinIO
-  (+ bucket initializer), and the local moderation stub. API, web, and extension
-  run from the host via pnpm.
-- **Database migrations** live in `apps/api/drizzle` (generated, gitignored).
-  Run `pnpm db:generate`, then `pnpm db:migrate`.
+  (+ bucket initializer), and the real Laya `laya-serve` container. API, web,
+  and extension run from the host via pnpm. `--profile stub` swaps Laya for the
+  offline test double on `:8080`.
+- **Database migrations** live in `apps/api/drizzle` (generated and tracked).
+  Run `pnpm db:migrate`; regenerate only after schema changes with
+  `pnpm db:generate`.
 - **Seed** creates `demo@advertiser.test` with password
   `demo-advertiser-pass-123`, $50 balance, and two active campaigns.
 - **API start** requires a built `@meantime/shared` because package exports
@@ -671,10 +692,13 @@ These are tracked as tasks in [TASKS.md](./TASKS.md).
     using the verified payload.
 13. Prefetch performs an N+1 query for variants and loads all active campaigns
     before filtering in memory.
-14. The moderation service is a local stub; a real classifier must be supplied.
-15. `@meantime/shared` is built output-linked, so a fresh clone must build
+14. Laya is a text model, so task-proof screenshots are never analysed; task
+    approval always needs a human (`screenshot_unverified`).
+15. The local `infra/laya-stub` is an offline protocol test double, not a
+    classifier; production must run the real upstream image.
+16. `@meantime/shared` is built output-linked, so a fresh clone must build
     before starting production artifacts (Turbo handles this).
-16. Referral attribution rejects signups whose hashed IP overlaps the
+17. Referral attribution rejects signups whose hashed IP overlaps the
     referrer's, so a successful referral cannot be exercised from a single
     machine/egress IP.
 
@@ -685,7 +709,12 @@ These are tracked as tasks in [TASKS.md](./TASKS.md).
 Docker was unavailable in the authoring environment, so compose itself was not
 executed. The database-dependent path was exercised against an embedded
 PostgreSQL 18 instance on `127.0.0.1:55432`, with the API built via `tsc` and
-run with `node dist/index.js`. The moderation stub ran on `:8080`.
+run with `node dist/index.js`. The real Laya model was run **without Docker**:
+the pinned upstream `v0.4.21` source was installed into a Python 3.13 virtualenv
+with `torch==2.15.0+cpu` and the `[serve]` extra, and `laya-serve` loaded the
+English checkpoint (`convaiinnovations/laya`, revision `7b928d8`, ~808 MB in
+the HF cache) on `127.0.0.1:8000`. The offline `/v1/systemone` test double on
+`:8080` also speaks the same shape.
 
 Verified:
 
@@ -707,13 +736,29 @@ Verified:
   guard respond as expected.
 - Advertiser routes (campaign create/list/variants/stats/analytics) work when
   given a signed advertiser token. `POST /ads/click` records a click.
-- Moderation fails closed: with the stub down a campaign is `draft` /
-  `needs_review`; with it up a clean campaign is `active` / `auto_approved`; a
-  blocked term is `auto_rejected` before any network call.
+- Moderation against the **real English checkpoint**: `GET /health` reports
+  `loaded: ["english"]` on CPU; clean ad copy scores 92 and is `auto_approved`;
+  crypto/prize/lottery scams score 0–36 and are `auto_rejected`; ambiguous
+  copy lands in `needs_review`; a blocked term is `auto_rejected` before any
+  network call. A clean task link stays in `needs_review` with
+  `screenshot_unverified`, while phishing/prize links are rejected. The
+  classifier answers in ~0.3 s for the single category question on CPU (four
+  questions took ~1.0 s), and a timeout still routes to `needs_review`.
+- Task moderation rejects a suspicious link and leaves a clean link in
+  `needs_review` with `screenshot_unverified`.
+- The end-to-end earn loop on the rebuilt API: prefetch → 5.2 s verified
+  telemetry event → `earnedMicro: 11000` (55% of a 20,000 µ$ bid) → balance and
+  impression list.
 
 Not verified:
 
-- `docker compose up` (no Docker binary).
+- `docker compose up` (no Docker binary; the sandbox has no root or Docker
+  socket), so the container image itself and its `laya-models` volume remain
+  unbuilt. The model was run from upstream source instead.
+- No real browser was available, so the extension was built and its manifest
+  inspected but not loaded into Chrome.
+- Formal Laya accuracy/precision on a labelled benchmark. Prompt calibration
+  used a small hand-written sample of clean ads and obvious fraud.
 - MinIO object upload (only presigned URL generation was tested).
 - The extension loaded unpacked in Chrome.
 - A successful referral attribution (same-IP rejection) and a payout above the

@@ -20,7 +20,8 @@ meantime/
 ├── packages/
 │   └── shared/       Types, zod validators, WebCrypto, Drizzle schema, configs
 ├── infra/
-│   └── laya-stub/    Local Node moderation stub used by Docker compose
+│   ├── laya-stub/    Offline test double for Laya's /v1/systemone protocol
+│   └── laya-host.sh  Run the real Laya server without Docker
 ├── docker-compose.yml
 ├── drizzle.config.ts
 ├── turbo.json
@@ -213,7 +214,16 @@ updates.
 - A non-OK response, malformed body, timeout, or exception must return `null`
   and route to `needs_review`.
 - Reputation adjustments are capped and must not rescue hard-rejected content.
-- The local `infra/laya-stub` is a development stand-in, not a production
+- The real classifier is open-source Laya (`laya-serve`, TypeSafe Jev
+  `/v1/systemone`), not a chat model. Keep the request/response mapping in
+  `apps/api/src/moderation/laya.ts` aligned with upstream.
+- Ask one neutral `choice` question: ads over `legitimate_ad` / `low_quality` /
+  `deceptive` / `fraud`, tasks over `normal` / `promo` / `phishing` / `fraud`.
+  Do not reintroduce per-offence `noul` questions; the real checkpoint scores
+  essentially every ad as spam.
+- Laya is text-only. It can judge ad copy and links, not task screenshots; do
+  not auto-approve a screenshot-bearing task on a text-only verdict.
+- The local `infra/laya-stub` is an offline test double, not a production
   classifier. Do not describe it as a real ML model.
 
 ### Style
@@ -329,7 +339,8 @@ before relying on the related flow:
 - No payout processor settlement.
 - No automated tests.
 - No rate limiting or refresh-token rotation.
-- The moderation service is a local stub in development.
+- Task-proof screenshots are not analysed by the text-only Laya model, so they
+  always land in `needs_review`.
 - `users.signupIp` stores a raw IP (legacy).
 - `POST /ads/click` does not verify the lease signature.
 - Prefetch performs N+1 variant queries.

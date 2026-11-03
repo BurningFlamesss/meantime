@@ -51,9 +51,49 @@ services:
       "
     restart: "no"
 
-  # Local, deterministic stand-in for the Laya classifier.
-  # Production should point LAYA_ENDPOINT at a real classifier service.
+  # Real Laya inference server: TypeSafe Jev-compatible POST /v1/systemone.
+  # Built from the pinned upstream tag. The first build is large (PyTorch CPU)
+  # and the first run downloads the English checkpoint (~400MB) into the volume.
   laya:
+    build:
+      context: https://github.com/NandhaKishorM/laya.git#v0.4.21
+      args:
+        TORCH_INDEX: cpu
+        TORCH_VERSION: "2.14.0"
+    command: ["laya-serve"]
+    environment:
+      LAYA_HOST: "0.0.0.0"
+      LAYA_PORT: "8000"
+      LAYA_DEVICE: "cpu"
+      # Preload English so the first ad request does not pay the load cost and
+      # time out into needs_review. Multilingual loads lazily when detected.
+      LAYA_PRELOAD: "1"
+      LAYA_MODELS: "english"
+      OMP_NUM_THREADS: "4"
+    ports:
+      # Loopback only: `laya-serve` has no API key unless LAYA_API_KEY is set.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - laya-models:/home/laya/.cache/huggingface
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.environ['LAYA_PORT']+'/health', timeout=4)",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10m
+    restart: unless-stopped
+
+  # Fast, offline test double that speaks the same /v1/systemone protocol.
+  # Use it with `docker compose --profile stub up -d` and
+  # LAYA_ENDPOINT=http://localhost:8080. Never treat its scores as model output.
+  laya-stub:
+    profiles: ["stub"]
     build: ./infra/laya-stub
     ports:
       - "8080:8080"
@@ -67,3 +107,4 @@ services:
 volumes:
   pgdata:
   miniodata:
+  laya-models:

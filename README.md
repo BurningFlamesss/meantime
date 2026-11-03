@@ -17,7 +17,8 @@ prompt and the AI's response — with 55% of ad spend going to the user.
 ```bash
 pnpm install
 
-# 1. Local infrastructure: postgres, redis, minio (+ bucket), moderation stub
+# 1. Local infrastructure: postgres, redis, minio (+ bucket), Laya classifier.
+# The first run builds Laya (PyTorch CPU) and downloads its checkpoint.
 docker compose up -d
 
 # 2. API environment + database (migrations are committed under apps/api/drizzle)
@@ -86,18 +87,56 @@ shows per-variant views, completion rate, and retention.
 
 ## Laya auto-moderation
 
-Campaigns and social-task proofs are moderated by [Laya](#), an open-source,
-non-chat AI that runs in Docker as a local sidecar (`laya` service in
-`docker-compose.yml`). Because it's non-chat, it takes structured input and
-returns a score and labels rather than free text — nothing is sent to a
-third-party API. The local `infra/laya-stub` is a deterministic development
-stand-in, not a production classifier.
+Campaigns and social-task links are moderated by
+[Laya](https://github.com/NandhaKishorM/laya), an open-source, non-autoregressive
+decision engine. It is not a chat model: it takes a state plus typed questions
+(`choice`, `score`, `noul`) and returns calibrated answers in one forward pass —
+nothing is sent to a third-party API.
 
-The API calls `POST {LAYA_ENDPOINT}/v1/classify` with the ad copy (or the task
-proof image + URL) and blends the returned 0–100 score with lightweight
-reputation signals. Above the auto-approve threshold a submission goes live
-instantly; below the auto-reject floor it's refused; the middle band routes
-to a human reviewer.
+`docker-compose.yml` builds the pinned upstream `v0.4.21` image and runs
+`laya-serve` on `http://localhost:8000`, the same HTTP server as upstream's
+`compose.http.yaml`. The API calls `POST {LAYA_ENDPOINT}/v1/systemone` with the
+ad copy (headline, body, CTA, destination URL) and one `choice` question over
+four categories — legitimate ad, low quality, deceptive, fraud — plus an
+ordinal severity. Risk is `P(fraud) + 0.5·P(deceptive)`; that becomes the
+0–100 score used by the rest of the pipeline, which then blends in lightweight
+reputation signals. Task links use a second `choice` over normal / promo /
+phishing / fraud, with risk `1.15·(P(phishing) + P(fraud))`; a clean link still
+stops at human review because Laya cannot see the screenshot.
+
+Above the auto-approve threshold a submission goes live instantly; below the
+auto-reject floor it's refused; the middle band routes to a human reviewer.
+
+The category question is deliberate. The checkpoint over-fires on yes/no
+phrasing: asked "is this advertisement spam?" it answers ~1.0 for any ad at all,
+and "is this a scam?" scores ordinary copy around 0.7. Loading the prompt with
+the words "scam" or "deceptive" also shifts every option toward suspicion. A
+single choice with neutral option labels is what the checkpoint actually
+separates, so the client uses that shape and the offline stub mirrors it.
+
+The first `docker compose up` builds a PyTorch CPU image and the first run
+downloads the English checkpoint (~800 MB). For a fast offline loop,
+`docker compose --profile stub up -d` starts `infra/laya-stub`, a deterministic
+test double that speaks the same `/v1/systemone` protocol but is **not** a
+model; point `LAYA_ENDPOINT` at `http://localhost:8080` for that.
+
+### Running Laya without Docker
+
+If Docker is unavailable, `infra/laya-host.sh` installs the pinned upstream
+package into a Python virtualenv and runs the same `laya-serve` on CPU:
+
+```bash
+./infra/laya-host.sh
+curl -s http://127.0.0.1:8000/health
+```
+
+It requires Python >=3.10, caches the checkpoint under
+`~/.local/share/meantime/hf`, and takes a few minutes on first run. Override
+`LAYA_PORT`, `LAYA_DEVICE`, or `HF_HOME` through the environment.
+
+Laya is text-only, so social-task screenshots are not analysed. A clean task
+link still goes to `needs_review` (`screenshot_unverified`) rather than being
+auto-approved; a scam or phishing link is rejected before review.
 
 Security boundary: deterministic policy checks (blocked terms, malformed
 URLs) run *before* Laya and can hard-reject clear-cut abuse without consulting

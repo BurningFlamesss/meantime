@@ -17,7 +17,8 @@ private beta · P2 = post-launch / polish
 | WXT extension | `[x]` build | `.output/chrome-mv3` builds (169.56 KB). Not loaded in Chrome. |
 | Database migrations | `[x]` applied | `apps/api/drizzle/0000_uneven_tag.sql`, 17 tables, applied to PostgreSQL 18. |
 | Demo seed | `[x]` run | 1 advertiser + 2 active campaigns inserted. |
-| Docker compose | `[!]` not run | Docker is not installed in the authoring environment. Verified with an embedded PostgreSQL + host-run moderation stub instead. |
+| Docker compose | `[!]` not run | Docker is not installed in the authoring environment (no root, no Docker socket). Verified with an embedded PostgreSQL + host-run Laya instead. |
+| Laya moderation | `[x]` real model | The pinned upstream `v0.4.21` `laya-serve` was run from source with CPU torch and the English checkpoint on `:8000`. Clean copy → 92/`auto_approved`, crypto/prize scams → 0–36/`auto_rejected`, clean task link → `needs_review`. The Docker image itself is still unbuilt. |
 | Automated tests | `[ ]` | No test suite exists. |
 | Auth/onboarding UX | `[ ]` | Blocks a true end-to-end demo. |
 
@@ -99,7 +100,11 @@ private beta · P2 = post-launch / polish
 - [x] Wrote `PRD.md`, `ARCHITECTURE.md`, `DESIGN-SYSTEM.md`, `AGENTS.md`,
       `TASKS.md`.
 - [x] Added `apps/api/.env.example`.
-- [x] Added local moderation stub and wired it into Docker compose.
+- [x] Integrated the real open-source Laya classifier (`laya-serve`,
+      `POST /v1/systemone`) into the moderation client and Docker compose,
+      pinned to upstream `v0.4.21`.
+- [x] Reworked `infra/laya-stub` into an offline test double that speaks the
+      same `/v1/systemone` protocol (it is not a model).
 - [x] Added MinIO bucket initializer.
 - [x] Applied migrations and seed to a real PostgreSQL 18 instance.
 - [x] Fixed API 500 when serializing BigInt money columns (global string
@@ -114,9 +119,31 @@ private beta · P2 = post-launch / polish
       `no_trusted_input`.
 - [x] Verified ledger is balanced after a verified view (user credit + platform
       revenue = advertiser debit) and that replay does not credit twice.
-- [x] Verified moderation: classifier down → `needs_review`/`draft`, stub up →
-      `auto_approved`/`active`, blocked term → `auto_rejected` without network.
-- [ ] Docker compose actually executed (blocked: no Docker binary).
+- [x] Verified moderation over Laya's real `/v1/systemone` protocol: classifier
+      down → `needs_review`/`draft`; clean copy → Laya verdict + reputation
+      adjustment; crypto/prize scams → `auto_rejected`; suspicious TLD →
+      `needs_review` with a `suspicious_tld` reason; blocked term →
+      `auto_rejected` without network.
+- [x] Ran the real Laya `v0.4.21` server from upstream source (Python 3.13
+      venv, `torch==2.15.0+cpu`, `[serve]` extra) and downloaded the English
+      checkpoint (`convaiinnovations/laya`, revision `7b928d8`, ~808 MB).
+- [x] Verified `/health` reports `loaded: ["english"]` on CPU and inference
+      answers in ~1.1 s after preload.
+- [x] Replaced the per-offence `noul` questions with one `choice` over
+      legitimate/low-quality/deceptive/fraud: against the real checkpoint the
+      old questions scored **every** ad as spam (~1.0), so all campaigns were
+      auto-rejected. Clean ad copy now scores 92 → `auto_approved`.
+- [x] Switched task links to a neutral `normal`/`promo`/`phishing`/`fraud`
+      choice and dropped the severity head from task risk; the previous
+      `legitimate`/`spam` prompt labelled ordinary X and Chrome Web Store links
+      as spam. Clean links now stay in `needs_review`; prize/phishing URLs are
+      rejected.
+- [x] Added `infra/laya-host.sh` so the real server can be run without Docker.
+- [x] Updated `infra/laya-stub` to answer the same choice protocol with
+      deterministic probabilities.
+- [x] Re-verified the earn loop on the rebuilt API: prefetch → 5.2 s verified
+      view → 11,000 µ$ credited (55% of a 20,000 µ$ bid) → balance/impressions.
+- [ ] Docker compose actually executed (blocked: no Docker binary/root).
 
 ---
 
@@ -172,10 +199,13 @@ referrer sees a pending referral in `/me/referrals`.
 
 ### T-05 · Run and validate Docker compose
 
-- [x] Compose file defines Postgres, Redis, MinIO, bucket init, and moderation
-      stub with healthchecks.
-- [x] Moderation stub implements `POST /v1/classify`.
+- [x] Compose file defines Postgres, Redis, MinIO, bucket init, and the real
+      Laya `laya-serve` service with healthchecks.
+- [x] Laya integration uses upstream's `POST /v1/systemone` contract.
+- [x] Offline test double under `--profile stub` speaks the same contract.
 - [ ] `docker compose up -d` starts all services healthy.
+- [!] The Laya container image was not built; the same upstream tag was
+      installed and run natively instead (see above).
 - [x] `pnpm db:migrate` succeeds against a real PostgreSQL 18 instance
       (embedded fallback, not compose).
 - [x] `pnpm db:seed` inserts the demo advertiser and two campaigns.
@@ -345,7 +375,9 @@ raw IPs.
 | B-12 | `@meantime/shared` exports build output, so a fresh production start requires a build. | Confusing failure if run directly. | Documented; keep Turbo ordering. |
 | B-13 | No Docker available in the authoring environment. | Compose unverified. | Run T-05 on a Docker-capable machine. |
 | B-14 | Referral attribution rejects same-IP signups (`ip_overlap_with_referrer`). | Cannot exercise a successful referral on a single machine. | Test with distinct egress IPs, or add an explicit dev override. |
-| B-15 | `users.signupIp` stores the raw request IP (see B-07). | Privacy gap remains. | T-07. |
+| B-15 | Laya is text-only; task screenshots are never analysed. | Task proofs always need a human (`screenshot_unverified`). | Add an image-capable classifier or a reviewer UI. |
+| B-16 | Real Laya was run from source, but the container image is still unbuilt (no Docker). | Compose and the `laya-models` volume are unverified. | Run T-05 on a Docker-capable machine. |
+| B-17 | The real checkpoint is poorly calibrated for yes/no moderation questions; the original `noul` set scored every ad as spam. Fixed with a `choice` category question (see §1). | Clean copy can still land in `needs_review` (e.g. copy that mentions earning money, or an advertiser with prior rejections). | Build the evaluation harness in P2 before tuning the 85/40 bands. |
 
 ---
 

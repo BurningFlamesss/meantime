@@ -4,8 +4,8 @@
 - [x] Phase 2: Extension core & multi-LLM adapters
 - [x] Phase 3: Backend API & anti-fraud engine
 - [x] Phase 4: TanStack Start web app
-- [ ] Typecheck all four workspaces clean
-- [ ] Generate and apply migrations
-- [ ] Seed demo data
-- [ ] Build extension bundle
-- [ ] Run web app dev server end-to-end
+- [x] Typecheck all four workspaces clean
+- [x] Generate and apply migrations
+- [x] Seed demo data
+- [x] Build extension bundle
+- [x] Run web app production server end-to-end

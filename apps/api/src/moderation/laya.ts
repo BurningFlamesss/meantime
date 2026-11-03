@@ -15,7 +15,7 @@ import { LAYA, type ModerationOutcome, type ModerationDecision } from "@meantime
  */
 
 export interface LayaConfig {
-  /** Base URL of the Laya sidecar, e.g. http://localhost:8080 */
+  /** Base URL of `laya-serve`, e.g. http://localhost:8000 */
   endpoint: string;
   /** Request timeout; a slow Laya must not stall the API. */
   timeoutMs: number;
@@ -23,44 +23,139 @@ export interface LayaConfig {
 }
 
 export const DEFAULT_LAYA: LayaConfig = {
-  endpoint: process.env.LAYA_ENDPOINT ?? "http://localhost:8080",
+  endpoint: process.env.LAYA_ENDPOINT ?? "http://localhost:8000",
   timeoutMs: 4_000,
   enabled: (process.env.LAYA_ENABLED ?? "true") === "true",
 };
 
 /* ---------------------------- Laya HTTP client --------------------------- */
+/*
+ * Laya's server speaks TypeSafe Jev's `/v1/systemone` protocol: post a state
+ * plus typed questions, receive calibrated answers. We ask one neutral category
+ * question plus an ordinal severity, then fold the distribution into the 0-100
+ * score the rest of the moderation pipeline uses.
+ */
 
-interface LayaScoreRequest {
-  task: "ad_copy" | "proof_image";
-  text?: string;
-  url?: string;
-  imageKey?: string;
+interface LayaQuestion {
+  type: "choice" | "score" | "noul";
+  instructions: string;
+  criteria?: Record<string, string> | string[];
 }
 
-interface LayaScoreResponse {
-  score: number; // 0..100
-  labels: string[]; // e.g. ["spam", "misleading"]
-  confidence: number; // 0..1
+interface LayaAnswer {
+  type: "choice" | "score" | "noul";
+  choice?: string;
+  score?: number;
+  noul?: number;
+  /** Per-criterion distribution for a `choice` answer. */
+  probabilities?: Record<string, number>;
+  confidence?: number;
+  answer_confidence?: number;
 }
 
-async function layaClassify(
+interface LayaSystemOneResponse {
+  model?: string;
+  answers?: Record<string, LayaAnswer>;
+}
+
+export interface LayaJudgement {
+  /** Category distribution from the `choice` answer, keyed by criterion. */
+  probabilities: Record<string, number>;
+  /** Expected severity level, normalised to 0..1. */
+  severity: number;
+  confidence: number;
+  model: string;
+}
+
+function probabilityOf(judgement: LayaJudgement, key: string): number {
+  return asProbability(judgement.probabilities[key]);
+}
+
+/*
+ * Both question sets ask for a category rather than a yes/no per offence.
+ * That is not a stylistic choice: measured against the real English checkpoint,
+ * a `noul` phrased "Is this advertisement spam?" answers ~1.0 for any ad at all
+ * (it is, by definition, an advertisement), and "Is this a scam?" over-fires on
+ * benign copy. A single `choice` over mutually exclusive categories is what the
+ * checkpoint actually separates (clean copy -> legitimate_ad ~0.8, scam ->
+ * fraud ~0.9), so the score is derived from that distribution.
+ */
+
+/** Ad-copy questions. Neutral category labels keep the checkpoint calibrated. */
+const AD_QUESTIONS: Record<string, LayaQuestion> = {
+  shape: {
+    type: "choice",
+    instructions: "Which best describes `post`?",
+    criteria: {
+      legitimate_ad: "an honest advertisement for a real product or service",
+      low_quality: "low-effort or annoying marketing",
+      deceptive: "misleading or exaggerated claims",
+      fraud: "a scam or fraud designed to steal money or data",
+    },
+  },
+  severity: {
+    type: "score",
+    instructions: "How severe is any policy violation in `post`?",
+    criteria: [
+      "no violation",
+      "minor: low-quality or mildly misleading wording",
+      "clear violation: deceptive or high-pressure offer",
+      "severe: fraud, scam, or illegal product",
+    ],
+  },
+};
+
+/** Social-task links are text-classified; the screenshot itself is not sent. */
+const TASK_QUESTIONS: Record<string, LayaQuestion> = {
+  link: {
+    type: "choice",
+    instructions: "What is this link?",
+    criteria: {
+      normal: "a link to a normal post, profile, or product page",
+      promo: "a promotional or affiliate link",
+      phishing: "a link that impersonates a service to steal credentials",
+      fraud: "a link to a fake prize, giveaway, or investment scheme",
+    },
+  },
+};
+
+function asProbability(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(1, Math.max(0, value))
+    : 0;
+}
+
+async function layaJudge(
   cfg: LayaConfig,
-  req: LayaScoreRequest,
-): Promise<LayaScoreResponse | null> {
+  state: string | Record<string, string>,
+  questions: Record<string, LayaQuestion>,
+): Promise<LayaJudgement | null> {
   if (!cfg.enabled) return null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
   try {
-    const res = await fetch(`${cfg.endpoint}/v1/classify`, {
+    const base = cfg.endpoint.replace(/\/+$/, "");
+    const res = await fetch(`${base}/v1/systemone`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req),
+      body: JSON.stringify({ state, questions }),
       signal: controller.signal,
     });
     if (!res.ok) return null;
-    const body = (await res.json()) as LayaScoreResponse;
-    if (typeof body.score !== "number" || !Array.isArray(body.labels)) return null;
-    return body;
+    const body = (await res.json()) as LayaSystemOneResponse;
+    const answers = body.answers;
+    if (!answers || typeof answers !== "object") return null;
+
+    // The primary answer is a `choice`; the severity score only corroborates it.
+    const primary = answers.shape ?? answers.link ?? answers.scam;
+    if (!primary?.probabilities) return null; // not a category answer — fail safe
+
+    return {
+      probabilities: primary.probabilities,
+      severity: Math.min(1, asProbability((answers.severity?.score ?? 0) / 3)),
+      confidence: asProbability(primary.answer_confidence ?? primary.confidence ?? 0.5),
+      model: body.model ?? "unknown",
+    };
   } catch {
     return null; // timeout / unreachable — caller falls back safely
   } finally {
@@ -157,12 +252,21 @@ export async function moderateCampaign(
   const layers = ["policy"];
   const reasons = [...policy.reasons];
 
-  // Laya is the primary content judge.
-  const laya = await layaClassify(cfg, {
-    task: "ad_copy",
-    text: `${input.headline}\n${input.bodyText}\n${input.ctaText}`,
-    url: input.targetUrl,
-  });
+  // Laya is the primary content judge. It reads text, so the destination URL
+  // is part of the state rather than a separate field. The state is an object
+  // with a `post` key because the preset questions refer to `post`.
+  const laya = await layaJudge(
+    cfg,
+    {
+      post: [
+        `Headline: ${input.headline}`,
+        `Body: ${input.bodyText}`,
+        `Call to action: ${input.ctaText}`,
+        `Destination: ${input.targetUrl}`,
+      ].join("\n"),
+    },
+    AD_QUESTIONS,
+  );
 
   if (laya === null) {
     // Laya unavailable: never auto-approve on an outage — route to a human.
@@ -176,8 +280,18 @@ export async function moderateCampaign(
   }
 
   layers.push("laya");
-  reasons.push(...laya.labels.map((l) => `laya:${l}`));
-  let score = laya.score;
+
+  // Fraud dominates; a deceptive-but-not-fraudulent ad costs half as much.
+  const fraud = probabilityOf(laya, "fraud");
+  const deceptive = probabilityOf(laya, "deceptive");
+  const lowQuality = probabilityOf(laya, "low_quality");
+  if (fraud >= 0.5) reasons.push("laya:fraud");
+  else if (deceptive >= 0.5) reasons.push("laya:deceptive");
+  else if (lowQuality >= 0.5) reasons.push("laya:low_quality");
+  if (laya.severity >= 0.83) reasons.push("laya:severe");
+
+  const risk = Math.min(1, fraud + deceptive * 0.5);
+  let score = Math.round((1 - risk) * 100);
 
   // Reputation adjusts at the margins only — it cannot rescue bad content.
   if (input.advertiserRejectedCount > 0) {
@@ -197,8 +311,10 @@ export async function moderateCampaign(
 }
 
 /**
- * Task-proof moderation. Laya checks that the uploaded screenshot actually
- * shows the claimed platform/action (non-chat image classification).
+ * Task-proof moderation. Laya is a text model, so it judges the claimed post
+ * URL for phishing/scam signals. It cannot inspect the screenshot, which means
+ * a clean URL still needs a human to verify the image: this path never
+ * auto-approves.
  */
 export async function moderateTask(
   input: LayaTaskInput,
@@ -216,31 +332,48 @@ export async function moderateTask(
     };
   }
 
-  const laya = await layaClassify(cfg, {
-    task: "proof_image",
-    url: input.postUrl,
-    imageKey: input.screenshotKey,
-  });
+  const laya = await layaJudge(
+    cfg,
+    { post: [`Post URL: ${input.postUrl}`, `Task type: ${input.taskType}`].join("\n") },
+    TASK_QUESTIONS,
+  );
 
   if (laya === null) {
     layers.push("laya_unavailable");
     return {
       score: 50,
       decision: "needs_review",
-      reasons: [...reasons, "laya_unavailable"],
+      reasons: ["laya_unavailable"],
       layers,
     };
   }
 
   layers.push("laya");
-  reasons.push(...laya.labels.map((l) => `laya:${l}`));
-  let score = laya.score;
+
+  // A task link is judged on phishing/fraud only. Promo links are common in
+  // legitimate posts, and the ordinal severity head rates ordinary social URLs
+  // as "minor", so neither is a risk input here.
+  const phishing = probabilityOf(laya, "phishing");
+  const fraud = probabilityOf(laya, "fraud");
+  if (phishing >= 0.25) reasons.push("laya:phishing");
+  if (fraud >= 0.25) reasons.push("laya:fraud");
+
+  const risk = Math.min(1, (phishing + fraud) * 1.15);
+  let score = Math.round((1 - risk) * 100);
   if (input.accountAgeDays < 1) {
     score -= 10;
     reasons.push("new_account");
   }
 
   score = Math.max(0, Math.min(100, Math.round(score)));
-  // Social tasks pay cash, so the auto-approve bar is stricter.
-  return { score, decision: decide(score, LAYA.TASK_AUTO_APPROVE), reasons, layers };
+
+  // A clearly fraudulent link is rejected without human review.
+  if (score < LAYA.AUTO_REJECT) {
+    return { score, decision: "auto_rejected", reasons, layers };
+  }
+
+  // The screenshot is unverified by a text model, so fail closed even when the
+  // link looks clean. The task stays in the human review queue.
+  reasons.push("screenshot_unverified");
+  return { score, decision: "needs_review", reasons, layers };
 }
