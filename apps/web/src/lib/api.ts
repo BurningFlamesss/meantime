@@ -9,6 +9,20 @@ export function setToken(token: string): void {
   localStorage.setItem("mt_token", token);
 }
 
+export function clearToken(): void {
+  if (typeof window !== "undefined") localStorage.removeItem("mt_token");
+}
+
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    public body: string,
+  ) {
+    super(`${status}: ${body}`);
+    this.name = "ApiError";
+  }
+}
+
 export async function api<T>(path: string, init: RequestInit & { json?: unknown } = {}): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set("Accept", "application/json");
@@ -22,7 +36,7 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
   const res = await fetch(`${API_BASE}${path}`, { ...init, headers, body });
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
-    throw new Error(`${res.status}: ${text}`);
+    throw new ApiError(res.status, text);
   }
   return (await res.json()) as T;
 }

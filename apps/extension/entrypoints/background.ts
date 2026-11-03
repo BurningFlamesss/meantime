@@ -99,6 +99,9 @@ class MeanTimeBackground {
       case "flush_now":
         await this.flushTelemetry();
         return null;
+      case "prefetch_now":
+        await this.prefetchIfNeeded(true);
+        return null;
       case "cache_status":
         return { size: await cacheSize(), pending: await pendingCount() };
       default:

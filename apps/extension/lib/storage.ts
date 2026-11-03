@@ -32,6 +32,8 @@ export interface Identity {
   accessToken: string;
   refreshToken: string;
   tokenExpiresAt: number;
+  /** Display only; auth truth is the server. */
+  email?: string;
 }
 
 /** Per-campaign local view record used by the dedup engine. */

@@ -1,5 +1,6 @@
-import { Link, useRouterState } from "@tanstack/react-router";
-import type { ReactNode } from "react";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
+import { useEffect, useState, type ReactNode } from "react";
+import { clearToken, getToken } from "./api";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard" },
@@ -12,6 +13,20 @@ const NAV = [
 
 export function Shell({ children }: { children: ReactNode }) {
   const { location } = useRouterState();
+  const navigate = useNavigate();
+  const [signedIn, setSignedIn] = useState(false);
+
+  // Read localStorage after hydration to avoid an SSR/client mismatch.
+  useEffect(() => {
+    setSignedIn(!!getToken());
+  }, [location.pathname]);
+
+  function signOut(): void {
+    clearToken();
+    setSignedIn(false);
+    void navigate({ to: "/sign-in" });
+  }
+
   return (
     <div className="min-h-screen bg-neutral-50">
       <header className="sticky top-0 z-20 border-b border-neutral-200 bg-white/80 backdrop-blur">
@@ -39,6 +54,21 @@ export function Shell({ children }: { children: ReactNode }) {
                 </Link>
               );
             })}
+            {signedIn ? (
+              <button
+                onClick={signOut}
+                className="rounded-md px-3 py-1.5 text-sm font-medium text-neutral-500 transition-colors hover:text-neutral-900"
+              >
+                Sign out
+              </button>
+            ) : (
+              <Link
+                to="/sign-in"
+                className="rounded-md px-3 py-1.5 text-sm font-medium text-neutral-500 transition-colors hover:text-neutral-900"
+              >
+                Sign in
+              </Link>
+            )}
           </nav>
         </div>
       </header>

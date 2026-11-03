@@ -13,6 +13,7 @@
       }
       h1 { font-size: 15px; margin: 0 0 2px; }
       .sub { opacity: .65; margin: 0 0 14px; }
+      .auth-lead { opacity: .75; line-height: 1.45; margin: 0 0 12px; }
       fieldset { border: 1px solid rgba(127,127,127,.3); border-radius: 8px; margin: 0 0 12px; padding: 10px 12px; }
       legend { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; opacity: .6; padding: 0 4px; }
       label.mode { display: block; margin-bottom: 10px; cursor: pointer; }
@@ -20,13 +21,23 @@
       .mode-title { font-weight: 600; display: flex; align-items: center; gap: 6px; }
       .mode-desc { margin: 3px 0 0 20px; opacity: .75; line-height: 1.45; }
       .mode-desc.warn { color: #c98a00; }
-      select, button.action {
+      select, button.action, input.field {
         width: 100%; padding: 7px 9px; border-radius: 7px; font-size: 13px;
         border: 1px solid rgba(127,127,127,.4); background: transparent; color: inherit;
       }
+      input.field { margin-bottom: 10px; }
+      .field-label { display: block; font-size: 11px; opacity: .65; margin: 0 0 4px; }
       button.action { cursor: pointer; margin-top: 8px; font-weight: 600; }
       button.action:hover { background: rgba(127,127,127,.12); }
+      button.link {
+        display: block; width: 100%; background: none; border: none;
+        color: inherit; opacity: .65; text-decoration: underline;
+        cursor: pointer; padding: 8px 0 0; font-size: 12px;
+      }
+      button.link:hover { opacity: 1; }
       .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+      .account { border-bottom: 1px solid rgba(127,127,127,.2); padding-bottom: 8px; }
+      .account-email { font-weight: 600; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .stats { display: flex; gap: 8px; }
       .stat { flex: 1; text-align: center; border: 1px solid rgba(127,127,127,.25); border-radius: 8px; padding: 8px 4px; }
       .stat b { display: block; font-size: 16px; }
@@ -38,60 +49,100 @@
       .toggle input:checked + i { background: #2e9e5b; }
       .toggle input:checked + i::after { left: 18px; }
       #snooze-state { font-size: 11px; opacity: .7; margin-top: 6px; }
+      .error { color: #c0392b; font-size: 12px; margin: 8px 0 0; line-height: 1.4; }
+      .auth-hint { font-size: 11px; opacity: .55; margin: 0 0 8px; }
+      .server { margin-top: 12px; font-size: 12px; }
+      .server summary { cursor: pointer; opacity: .6; }
+      .server input { margin-top: 8px; }
+      .server-note { font-size: 11px; opacity: .6; margin: 6px 0 0; min-height: 13px; }
+      [hidden] { display: none !important; }
     </style>
   </head>
   <body>
     <h1>MeanTime</h1>
     <p class="sub">Micro-ads during AI wait time. You keep 55%.</p>
 
-    <div class="row">
-      <span><b>Ads enabled</b></span>
-      <span class="toggle"><input type="checkbox" id="enabled" /><i></i></span>
+    <section id="auth-view">
+      <p class="auth-lead">
+        Sign in to start earning. Ads appear only after you send an AI prompt,
+        and you can pause them at any time.
+      </p>
+      <form id="auth-form">
+        <label class="field-label" for="auth-email">Email</label>
+        <input id="auth-email" class="field" type="email" autocomplete="email" required />
+        <label class="field-label" for="auth-password">Password</label>
+        <input id="auth-password" class="field" type="password" autocomplete="current-password" required />
+        <p id="auth-hint" class="auth-hint">At least 10 characters.</p>
+        <p id="auth-error" class="error" role="alert" hidden></p>
+        <button id="auth-submit" class="action" type="submit">Sign in</button>
+        <button id="auth-toggle" class="link" type="button">New here? Create an account</button>
+      </form>
+
+      <details class="server">
+        <summary>Server</summary>
+        <label class="field-label" for="api-base">API URL</label>
+        <input id="api-base" class="field" type="url" placeholder="http://localhost:3001" />
+        <button id="save-server" class="action" type="button">Save server</button>
+        <p id="server-note" class="server-note"></p>
+      </details>
+    </section>
+
+    <div id="app-view" hidden>
+      <div class="row account">
+        <span id="account-email" class="account-email"></span>
+        <button id="sign-out" class="link" type="button">Sign out</button>
+      </div>
+
+      <div class="row">
+        <span><b>Ads enabled</b></span>
+        <span class="toggle"><input type="checkbox" id="enabled" /><i></i></span>
+      </div>
+      <div id="snooze-state"></div>
+
+      <fieldset>
+        <legend>Display mode</legend>
+        <label class="mode">
+          <span class="mode-title">
+            <input type="radio" name="displayMode" value="wait_time_only" />
+            Strict Wait-Time Only
+          </span>
+          <p class="mode-desc warn">
+            The ad disappears the instant the AI starts streaming. ⚠ If the AI
+            responds in under 5 seconds, the ad closes early and will not reach
+            the 5-second payout threshold.
+          </p>
+        </label>
+        <label class="mode">
+          <span class="mode-title">
+            <input type="radio" name="displayMode" value="persist_until_5s" />
+            Guaranteed 5s Persistence
+          </span>
+          <p class="mode-desc">
+            Recommended for earnings. If the AI answers faster than 5 seconds,
+            the ad stays anchored under your message until the 5-second view
+            timer completes, shows "✓ Earned", and fades out.
+          </p>
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Ad position</legend>
+        <select id="placement">
+          <option value="under_prompt">Below my prompt (action bar)</option>
+          <option value="thinking_indicator">Next to "Thinking…" indicator</option>
+          <option value="ai_footer">Below the AI response</option>
+        </select>
+      </fieldset>
+
+      <div class="stats">
+        <div class="stat"><b id="stat-balance">–</b><span>earned</span></div>
+        <div class="stat"><b id="stat-cache">–</b><span>ads cached</span></div>
+        <div class="stat"><b id="stat-pending">–</b><span>pending sync</span></div>
+      </div>
+
+      <button class="action" id="open-dashboard">Open earnings dashboard</button>
     </div>
-    <div id="snooze-state"></div>
 
-    <fieldset>
-      <legend>Display mode</legend>
-      <label class="mode">
-        <span class="mode-title">
-          <input type="radio" name="displayMode" value="wait_time_only" />
-          Strict Wait-Time Only
-        </span>
-        <p class="mode-desc warn">
-          The ad disappears the instant the AI starts streaming. ⚠ If the AI
-          responds in under 5 seconds, the ad closes early and will not reach
-          the 5-second payout threshold.
-        </p>
-      </label>
-      <label class="mode">
-        <span class="mode-title">
-          <input type="radio" name="displayMode" value="persist_until_5s" />
-          Guaranteed 5s Persistence
-        </span>
-        <p class="mode-desc">
-          Recommended for earnings. If the AI answers faster than 5 seconds,
-          the ad stays anchored under your message until the 5-second view
-          timer completes, shows "✓ Earned", and fades out.
-        </p>
-      </label>
-    </fieldset>
-
-    <fieldset>
-      <legend>Ad position</legend>
-      <select id="placement">
-        <option value="under_prompt">Below my prompt (action bar)</option>
-        <option value="thinking_indicator">Next to "Thinking…" indicator</option>
-        <option value="ai_footer">Below the AI response</option>
-      </select>
-    </fieldset>
-
-    <div class="stats">
-      <div class="stat"><b id="stat-balance">–</b><span>earned</span></div>
-      <div class="stat"><b id="stat-cache">–</b><span>ads cached</span></div>
-      <div class="stat"><b id="stat-pending">–</b><span>pending sync</span></div>
-    </div>
-
-    <button class="action" id="open-dashboard">Open earnings dashboard</button>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>
