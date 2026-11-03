@@ -389,7 +389,13 @@ export const socialTasks = pgTable(
     reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("social_tasks_user_idx").on(t.userId, t.createdAt)],
+  (t) => [
+    index("social_tasks_user_idx").on(t.userId, t.createdAt),
+    // One live reward per post per user; a rejected proof may be retried.
+    uniqueIndex("social_tasks_user_post_uidx")
+      .on(t.userId, t.postUrl)
+      .where(sql`status <> 'rejected'`),
+  ],
 );
 
 export const payoutDestinations = pgTable(
@@ -407,6 +413,9 @@ export const payoutDestinations = pgTable(
   },
   (t) => [
     uniqueIndex("payout_dest_user_uidx").on(t.userId, t.method, t.addressNormalized),
+    // One destination (per method) belongs to one account, enforced in the DB
+    // so two concurrent requests cannot claim it for different users.
+    uniqueIndex("payout_dest_method_address_uidx").on(t.method, t.addressNormalized),
     index("payout_dest_address_idx").on(t.addressNormalized),
   ],
 );
@@ -461,7 +470,11 @@ export const clickEvents = pgTable(
     geoCluster: text("geo_cluster"),
     clickedAt: timestamp("clicked_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("click_events_campaign_idx").on(t.campaignId, t.clickedAt)],
+  (t) => [
+    index("click_events_campaign_idx").on(t.campaignId, t.clickedAt),
+    // At most one click per verified impression; retries are idempotent.
+    uniqueIndex("click_events_impression_uidx").on(t.impressionId),
+  ],
 );
 
 export type User = typeof users.$inferSelect;

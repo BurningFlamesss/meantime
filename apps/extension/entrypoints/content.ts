@@ -12,6 +12,11 @@ import { PohiCollector } from "../lib/pohi";
 import { getSettings, saveSettings, STORAGE_KEYS, storageGet, uuidv4 } from "../lib/storage";
 import type { PromptCounter } from "../lib/storage";
 
+/** Schema cap on a single event's timings. Anything longer is clamped. */
+const MAX_EVENT_MS = 600_000;
+/** An ad never occupies the tab for longer than this. */
+const MAX_AD_LIFETIME_MS = 180_000;
+
 export default defineContentScript({
   matches: [
     "*://*.chatgpt.com/*",
@@ -35,7 +40,12 @@ type TriggerSource = "enter_key" | "send_button";
 
 class MeanTimeController {
   private readonly pohi = new PohiCollector();
-  private attached = false;
+  private pohiInput: HTMLElement | null = null;
+  private listenersInstalled = false;
+  private composerWaitObserver: MutationObserver | null = null;
+  private composerWaitTimer: number | null = null;
+  private inFlight = false;
+
   private activeWidget: AdWidget | null = null;
   private activeLease: {
     impressionId: string;
@@ -45,16 +55,22 @@ class MeanTimeController {
     pohiAtSubmit: Omit<PohiSignals, "aiMutationVerified">;
     closed: boolean;
   } | null = null;
+
   private generationObserver: MutationObserver | null = null;
   private generationCleanupTimer: number | null = null;
+  private lifetimeTimer: number | null = null;
+  private connectionTimer: number | null = null;
+  private initialAiNode: HTMLElement | null = null;
   private firstOutputAt: number | null = null;
 
   constructor(private readonly adapter: PlatformAdapter) {}
 
   start(): void {
     this.tryAttach();
-    // SPA navigations re-render the composer; re-attach after URL changes
-    // without polling — hook history changes once.
+    this.installGlobalListeners();
+
+    // SPA routers swap the composer without a reload. Re-resolve which input
+    // PoHI is attached to, but never re-add the document-level listeners.
     const onNavigate = () => setTimeout(() => this.tryAttach(), 300);
     const origPush = history.pushState;
     history.pushState = function (...args) {
@@ -62,41 +78,39 @@ class MeanTimeController {
       onNavigate();
       return ret;
     };
+    const origReplace = history.replaceState;
+    history.replaceState = function (...args) {
+      const ret = origReplace.apply(this, args);
+      onNavigate();
+      return ret;
+    };
     window.addEventListener("popstate", onNavigate, { passive: true });
+
+    // Closing the tab must settle the impression rather than losing it.
+    window.addEventListener("pagehide", () => this.finalize("navigated"), { passive: true });
   }
 
   /* ------------------------- trigger detection -------------------------- */
 
-  private tryAttach(): void {
-    const input = document.querySelector<HTMLElement>(
-      this.adapter.config.promptInputSelector,
-    );
-    if (!input) {
-      // Composer not mounted yet — retry on the next DOM mutation burst, once.
-      const once = new MutationObserver(() => {
-        if (document.querySelector(this.adapter.config.promptInputSelector)) {
-          once.disconnect();
-          this.tryAttach();
-        }
-      });
-      once.observe(document.body, { childList: true, subtree: true });
-      setTimeout(() => once.disconnect(), 15_000);
-      return;
-    }
-    if (this.attached) return;
-    this.attached = true;
+  /**
+   * Global listeners are capture-only and passive: they observe the page and
+   * never prevent or alter the AI site's own submit behavior. They stay valid
+   * across SPA re-renders because they resolve the composer at event time.
+   */
+  private installGlobalListeners(): void {
+    if (this.listenersInstalled) return;
+    this.listenersInstalled = true;
 
-    const composer = input.closest("form, [class*='composer'], [class*='prompt']") ?? input;
-
-    this.pohi.attach(input);
-
-    composer.addEventListener(
+    document.addEventListener(
       "keydown",
       (e: Event) => {
         const ke = e as KeyboardEvent;
-        if (ke.key === "Enter" && !ke.shiftKey && !ke.isComposing) {
-          this.onPromptSubmitted("enter_key");
-        }
+        if (ke.key !== "Enter" || ke.shiftKey || ke.isComposing || ke.keyCode === 229) return;
+        const input = this.currentInput();
+        if (!input) return;
+        const target = ke.target;
+        if (!(target instanceof Node) || (target !== input && !input.contains(target))) return;
+        void this.onPromptSubmitted("enter_key");
       },
       { capture: true, passive: true },
     );
@@ -104,87 +118,143 @@ class MeanTimeController {
     document.addEventListener(
       "pointerdown",
       (e: Event) => {
+        const input = this.currentInput();
         const target = e.target as Element | null;
-        if (target?.closest(this.adapter.config.sendButtonSelector)) {
-          this.onPromptSubmitted("send_button");
-        }
+        if (!input || !target) return;
+        const send = target.closest(this.adapter.config.sendButtonSelector);
+        if (!send) return;
+        const region = input.closest("form") ?? input.parentElement ?? input;
+        if (!region.contains(send)) return;
+        void this.onPromptSubmitted("send_button");
       },
       { capture: true, passive: true },
     );
   }
 
+  private currentInput(): HTMLElement | null {
+    return document.querySelector<HTMLElement>(this.adapter.config.promptInputSelector);
+  }
+
+  private tryAttach(): void {
+    const input = this.currentInput();
+    if (!input) {
+      this.waitForComposer();
+      return;
+    }
+    this.stopWaitingForComposer();
+    if (input !== this.pohiInput) {
+      this.pohiInput = input;
+      this.pohi.attach(input);
+    }
+  }
+
+  private waitForComposer(): void {
+    if (this.composerWaitObserver) return; // coalesce repeated nav events
+    this.composerWaitObserver = new MutationObserver(() => {
+      if (this.currentInput()) {
+        this.stopWaitingForComposer();
+        this.tryAttach();
+      }
+    });
+    this.composerWaitObserver.observe(document.documentElement, { childList: true, subtree: true });
+    this.composerWaitTimer = window.setTimeout(() => this.stopWaitingForComposer(), 15_000);
+  }
+
+  private stopWaitingForComposer(): void {
+    this.composerWaitObserver?.disconnect();
+    this.composerWaitObserver = null;
+    if (this.composerWaitTimer !== null) {
+      clearTimeout(this.composerWaitTimer);
+      this.composerWaitTimer = null;
+    }
+  }
+
   /* ------------------------------ lifecycle ----------------------------- */
 
   private async onPromptSubmitted(_source: TriggerSource): Promise<void> {
-    const settings = await getSettings();
-    if (!settings.enabled) return;
-    if (settings.snoozedUntil === -1 || settings.snoozedUntil > Date.now()) return;
-    if (this.activeWidget) return; // one ad at a time
+    if (this.inFlight || this.activeWidget) return; // one ad at a time
+    this.inFlight = true;
+    try {
+      const settings = await getSettings();
+      if (!settings.enabled) return;
+      if (settings.snoozedUntil === -1 || settings.snoozedUntil > Date.now()) return;
 
-    // Layer-4 pacing, enforced client-side against the local counter; the
-    // server re-checks authoritatively at prefetch/telemetry time.
-    if (!(await this.pacingAllows())) return;
+      // Layer-4 pacing, enforced client-side against the local counter; the
+      // server re-checks authoritatively at prefetch/telemetry time.
+      if (!(await this.pacingAllows())) return;
 
-    const snap = this.pohi.snapshot(false);
-    const pohiAtSubmit = {
-      inputInteractionScore: snap.inputInteractionScore,
-      keystrokeCount: snap.keystrokeCount,
-      trustedPasteSeen: snap.trustedPasteSeen,
-    };
+      // Wait briefly for the sent prompt bubble to render. Taking an ad before
+      // there is somewhere to put it would burn the lease.
+      const mountPoint = await this.waitForMountPoint(settings.placement, 1_500);
+      if (!mountPoint) return;
 
-    // <8ms budget: cache read + dedup + mount. If it misses, stay silent.
-    const t0 = performance.now();
-    const ad = await chrome.runtime
-      .sendMessage({ type: "take_ad" })
-      .catch(() => null);
-    if (!ad) return;
+      const snap = this.pohi.snapshot(false);
+      const pohiAtSubmit = {
+        inputInteractionScore: snap.inputInteractionScore,
+        keystrokeCount: snap.keystrokeCount,
+        trustedPasteSeen: snap.trustedPasteSeen,
+      };
 
-    const mountPoint = this.resolveMountPoint(settings.placement);
-    if (!mountPoint) return;
+      const ad = await chrome.runtime
+        .sendMessage({ type: "take_ad", platform: this.adapter.platformId })
+        .catch(() => null);
+      if (!ad) return;
 
-    const impressionId = uuidv4();
-    const submittedAt = Date.now();
+      const impressionId = uuidv4();
+      const submittedAt = Date.now();
 
-    const widget = new AdWidget(ad, {
-      onDismiss: (reason, snoozeMinutes) => {
-        this.finalize(reason, ad.campaignId);
-        if (reason === "snoozed" && typeof snoozeMinutes === "number") {
-          const until =
-            snoozeMinutes < 0 ? Number.MAX_SAFE_INTEGER : Date.now() + snoozeMinutes * 60_000;
-          void saveSettings({ snoozedUntil: until });
-        }
-      },
-      onEarned: () => {
-        if (!this.activeLease) return;
-        // Mode 2: earned before stream started — fade out now.
-        this.finalize("earned", ad.campaignId);
-      },
-      onClickCta: () => {
-        void chrome.runtime
-          .sendMessage({
-            type: "ad_click",
-            impressionId,
-            leaseToken: ad.leaseToken,
-          })
-          .catch(() => undefined);
-      },
-    });
+      const widget = new AdWidget(ad, {
+        onDismiss: (reason, snoozeMinutes) => {
+          this.finalize(reason);
+          if (reason === "snoozed" && typeof snoozeMinutes === "number") {
+            const until =
+              snoozeMinutes < 0 ? Number.MAX_SAFE_INTEGER : Date.now() + snoozeMinutes * 60_000;
+            void saveSettings({ snoozedUntil: until });
+          }
+        },
+        onEarned: () => this.finalize("earned"),
+        onClickCta: () => {
+          void chrome.runtime
+            .sendMessage({ type: "ad_click", impressionId, leaseToken: ad.leaseToken })
+            .catch(() => undefined);
+        },
+      });
 
-    this.activeWidget = widget;
-    this.activeLease = {
-      impressionId,
-      submittedAt,
-      displayMode: settings.displayMode,
-      placement: settings.placement,
-      pohiAtSubmit,
-      closed: false,
-    };
+      try {
+        widget.mount(mountPoint);
+      } catch {
+        widget.destroy(false);
+        void chrome.runtime.sendMessage({ type: "return_ad", ad }).catch(() => undefined);
+        return;
+      }
 
-    widget.mount(mountPoint);
-    void t0; // mount completed; budget check happens in dev telemetry only
+      this.activeWidget = widget;
+      this.activeLease = {
+        impressionId,
+        submittedAt,
+        displayMode: settings.displayMode,
+        placement: settings.placement,
+        pohiAtSubmit,
+        closed: false,
+      };
 
-    this.pohi.reset();
-    this.watchGeneration(widget);
+      this.pohi.reset();
+      this.armWatchdogs(widget);
+      this.watchGeneration(widget);
+    } finally {
+      this.inFlight = false;
+    }
+  }
+
+  /** Resolve the placement with a short poll; the prompt bubble may not exist yet. */
+  private async waitForMountPoint(placement: string, timeoutMs: number): Promise<HTMLElement | null> {
+    const deadline = performance.now() + timeoutMs;
+    while (performance.now() < deadline) {
+      const point = this.resolveMountPoint(placement);
+      if (point && point.isConnected) return point;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return null;
   }
 
   private resolveMountPoint(placement: string): HTMLElement | null {
@@ -208,37 +278,51 @@ class MeanTimeController {
 
   /* --------------------------- generation watch -------------------------- */
 
+  private armWatchdogs(widget: AdWidget): void {
+    this.lifetimeTimer = window.setTimeout(() => this.finalize("superseded"), MAX_AD_LIFETIME_MS);
+    // If the host is removed by the site (route change, re-render), settle the
+    // impression instead of holding the "one ad at a time" lock forever.
+    this.connectionTimer = window.setInterval(() => {
+      if (this.activeWidget && !widget.host.isConnected) this.finalize("navigated");
+    }, 1_000);
+  }
+
   /**
-   * Scoped observer: attached to the response region (or chat container as a
-   * fallback), never document.body-wide, removed the moment generation ends
-   * or the ad closes. This is what the "no global MutationObserver" rule
-   * allows: targeted, short-lived, teardown-guaranteed.
+   * Scoped observer: attached to the response region, never document.body.
+   * Output is considered new only when a different AI message node exists than
+   * the one present at submit time, so a previous completed answer cannot end
+   * the ad instantly.
    */
   private watchGeneration(widget: AdWidget): void {
-    const root =
-      this.adapter.findLatestAiMessage()?.parentElement ??
-      document.querySelector<HTMLElement>("main") ??
-      document.body;
-
-    let firstOutputAt: number | null = null;
+    const initial = this.adapter.findLatestAiMessage();
+    this.initialAiNode = initial;
+    const root = initial?.parentElement ?? document.querySelector<HTMLElement>("main");
+    if (!root) return;
 
     const completeSelector = this.adapter.config.generationCompleteSelector;
-    const streamSelector = this.adapter.config.streamingContainerSelector;
 
-    this.generationObserver = new MutationObserver(() => {
-      if (firstOutputAt === null && root.querySelector(streamSelector)?.textContent?.trim()) {
-        firstOutputAt = Date.now();
-        this.firstOutputAt = firstOutputAt;
+    const check = () => {
+      if (!this.activeWidget || this.activeLease?.closed) return;
+      const latest = this.adapter.findLatestAiMessage();
+      const isNew = this.initialAiNode === null ? latest !== null : latest !== null && latest !== this.initialAiNode;
+      if (!isNew || !latest) return;
+
+      const hasOutput = (latest.textContent?.trim().length ?? 0) > 0;
+      if (hasOutput && this.firstOutputAt === null) {
+        this.firstOutputAt = Date.now();
         this.onFirstAiOutput(widget);
       }
-      if (root.querySelector(completeSelector)) {
+      const complete = latest.matches(completeSelector) || latest.querySelector(completeSelector) !== null;
+      if (complete) {
         this.teardownObserver();
+        if (this.activeWidget) this.finalize("stream_started");
       }
-    });
-    this.generationObserver.observe(root, { childList: true, subtree: true });
+    };
 
-    // Hard teardown guarantee: never observe longer than 3 minutes.
-    this.generationCleanupTimer = window.setTimeout(() => this.teardownObserver(), 180_000);
+    this.generationObserver = new MutationObserver(check);
+    this.generationObserver.observe(root, { childList: true, subtree: true, characterData: true });
+    this.generationCleanupTimer = window.setTimeout(() => this.teardownObserver(), MAX_AD_LIFETIME_MS);
+    check();
   }
 
   private onFirstAiOutput(widget: AdWidget): void {
@@ -246,9 +330,9 @@ class MeanTimeController {
 
     if (this.activeLease.displayMode === "wait_time_only") {
       // Mode 1: instant removal the moment the AI starts streaming.
-      this.finalize("stream_started", widget.ad.campaignId);
+      this.finalize("stream_started");
     } else if (widget.timer.cumulativeMs >= MIN_VIEWABLE_MS) {
-      this.finalize("earned", widget.ad.campaignId);
+      this.finalize("earned");
     }
     // Mode 2 with < 5s accrued: keep the ad anchored; onEarned closes it.
   }
@@ -262,31 +346,48 @@ class MeanTimeController {
     }
   }
 
+  private clearWatchdogs(): void {
+    if (this.lifetimeTimer !== null) {
+      clearTimeout(this.lifetimeTimer);
+      this.lifetimeTimer = null;
+    }
+    if (this.connectionTimer !== null) {
+      clearInterval(this.connectionTimer);
+      this.connectionTimer = null;
+    }
+  }
+
   /* ------------------------------ finalization --------------------------- */
 
-  private finalize(reason: CloseReason, campaignId: string): void {
+  private finalize(reason: CloseReason): void {
     const widget = this.activeWidget;
     const lease = this.activeLease;
     if (!widget || !lease || lease.closed) return;
     lease.closed = true;
     this.teardownObserver();
+    this.clearWatchdogs();
 
-    const cumulativeVisibleMs = Math.round(widget.timer.cumulativeMs);
+    const cumulativeVisibleMs = Math.min(MAX_EVENT_MS, Math.round(widget.timer.cumulativeMs));
     const earned = cumulativeVisibleMs >= MIN_VIEWABLE_MS;
-    const aiWaitDurationMs = (this.firstOutputAt ?? Date.now()) - lease.submittedAt;
+    const aiWaitDurationMs = Math.min(
+      MAX_EVENT_MS,
+      Math.max(0, Math.round((this.firstOutputAt ?? Date.now()) - lease.submittedAt)),
+    );
     const aiMutationVerified = this.firstOutputAt !== null;
     this.firstOutputAt = null;
 
-    const hoverMs = Math.round(widget.hover.hoverMs);
+    const hoverMs = Math.min(MAX_EVENT_MS, Math.round(widget.hover.hoverMs));
     const hoverIntentional = widget.hover.intentional;
+    const leaseToken = widget.ad.leaseToken;
 
     widget.destroy(reason === "earned");
     this.activeWidget = null;
     this.activeLease = null;
+    this.initialAiNode = null;
 
     const event: ImpressionEvent = {
       impressionId: lease.impressionId,
-      leaseToken: widget.ad.leaseToken,
+      leaseToken,
       platform: this.adapter.platformId,
       placement: lease.placement,
       displayMode: lease.displayMode,
@@ -305,7 +406,7 @@ class MeanTimeController {
     };
 
     void chrome.runtime
-      .sendMessage({ type: "queue_impression", event, campaignId })
+      .sendMessage({ type: "queue_impression", event, campaignId: widget.ad.campaignId })
       .catch(() => undefined);
   }
 

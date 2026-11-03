@@ -7,7 +7,6 @@ import {
   type Db,
   devices,
   referrals,
-  users,
   userNetworkEvents,
 } from "@meantime/shared/db";
 import type { LedgerTx } from "./ledger.js";
@@ -66,16 +65,17 @@ export async function checkReferralAllowed(
 }
 
 /**
- * Called after each verified impression. When the referred user's lifetime
- * verified earnings cross the qualification threshold, the referral pays out.
- * Returns true when a bonus was credited.
+ * Called inside the same transaction as a verified impression. When the
+ * referred user's lifetime verified earnings cross the qualification
+ * threshold, the referral pays out once. The conditional UPDATE is the
+ * idempotency gate: concurrent impressions can both see `pending`, but only
+ * one can flip the row and post the bonus.
  */
 export async function maybeQualifyReferral(
-  db: Db,
-  referredUserId: string,
   tx: LedgerTx,
+  referredUserId: string,
 ): Promise<boolean> {
-  const [referral] = await db
+  const [referral] = await tx
     .select()
     .from(referrals)
     .where(eq(referrals.referredUserId, referredUserId))
@@ -83,14 +83,16 @@ export async function maybeQualifyReferral(
   if (!referral || referral.status !== "pending") return false;
 
   // Lifetime verified earnings = current available + already-withdrawn.
-  const earned = await balanceOf(db, ACCOUNTS.user(referredUserId));
+  const earned = await balanceOf(tx, ACCOUNTS.user(referredUserId));
   const qualified = earned >= BigInt(REFERRAL_QUALIFY_EARNINGS_USD);
   if (!qualified) return false;
 
-  await tx
+  const claimed = await tx
     .update(referrals)
     .set({ status: "paid", paidAt: new Date(), qualifiedEarningsMicro: earned })
-    .where(eq(referrals.id, referral.id));
+    .where(and(eq(referrals.id, referral.id), eq(referrals.status, "pending")))
+    .returning({ id: referrals.id });
+  if (claimed.length === 0) return false; // another settlement already paid it
 
   await postTransfer(tx, {
     entryType: "referral_bonus",

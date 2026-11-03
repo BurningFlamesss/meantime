@@ -38,6 +38,8 @@ export interface PrefetchedAd {
   bodyText: string;
   ctaText: string;
   targetUrl: string;
+  /** Campaign platform targets; empty = all platforms. The extension filters locally. */
+  targetPlatforms: string[];
   frequencyCap: FrequencyCapMeta;
 }
 
@@ -204,6 +206,7 @@ export interface CampaignStats {
 export interface TaskSubmission {
   taskType: TaskPlatform;
   postUrl: string;
+  screenshotKey: string;
 }
 
 export interface TrustScoreBreakdown {

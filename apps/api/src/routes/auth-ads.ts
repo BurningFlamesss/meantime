@@ -265,6 +265,7 @@ export async function adsRoutes(app: FastifyInstance, ctx: AppContext) {
         bodyText: copy.bodyText,
         ctaText: copy.ctaText,
         targetUrl: campaign.targetUrl,
+        targetPlatforms: (campaign.targetPlatforms as string[]) ?? [],
         frequencyCap: {
           maxPerDay: campaign.maxPerDayPerUser,
           cooldownSec: campaign.cooldownSec,

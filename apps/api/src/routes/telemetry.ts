@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, isNull } from "drizzle-orm";
 import {
   MIN_VIEWABLE_MS,
   REVENUE_SHARE,
@@ -9,7 +9,7 @@ import {
   type TelemetryBatchResponse,
   type TelemetryEventResult,
 } from "@meantime/shared";
-import { adLeases, campaigns, impressions, telemetryBatches, users } from "@meantime/shared/db";
+import { adLeases, campaigns, impressions, telemetryBatches } from "@meantime/shared/db";
 import type { AppContext } from "../context.js";
 import { requireUser } from "../context.js";
 import { ACCOUNTS, postTransfer } from "../ledger.js";
@@ -89,6 +89,20 @@ export async function telemetryRoutes(app: FastifyInstance, ctx: AppContext) {
   });
 }
 
+/**
+ * One event, settled exactly once.
+ *
+ * Ordering is deliberate:
+ *  1. Verify the lease HMAC and bind it to the authenticated user.
+ *  2. Claim the lease with a single conditional UPDATE. Two concurrent
+ *     submissions cannot both win, whether or not Redis is reachable.
+ *  3. Score PoHI / viewport / cadence.
+ *  4. For a payable view, lock the campaign row, enforce its daily budget,
+ *     insert the impression (client UUID is the idempotency key), post the
+ *     ledger transfers and update spend inside one transaction.
+ *
+ * A crash between steps loses at most one lease; it can never double-pay.
+ */
 async function processEvent(
   ctx: AppContext,
   userId: string,
@@ -107,31 +121,33 @@ async function processEvent(
   );
   if (!verification.ok || !verification.payload) {
     reasons.push(`lease_${verification.reason ?? "invalid"}`);
-    await persist(ctx, batchId, userId, event, "rejected", reasons, 0n, null);
+    // No verified campaign id, so there is nothing safe to attach the row to.
     return { impressionId: event.impressionId, status: "rejected", earnedMicro: 0, reasons };
   }
   const lease = verification.payload;
   if (lease.uid !== userId) {
     reasons.push("lease_user_mismatch");
-    await persist(ctx, batchId, userId, event, "rejected", reasons, 0n, null);
     return { impressionId: event.impressionId, status: "rejected", earnedMicro: 0, reasons };
   }
 
-  // Single-use enforcement: Redis SETNX, backed by the DB consumedAt column.
-  const leaseKey = `lease:consumed:${lease.lid}`;
-  const setnx = await ctx.redis
-    .set(leaseKey, event.impressionId, "EX", 86400, "NX")
-    .catch(() => "OK"); // Redis down: fall through to the DB check below.
+  // Single-use enforcement is the DB row itself. Redis would only be a cache:
+  // marking it first can reject a lease whose DB write never happened.
+  const claimed = await ctx.db
+    .update(adLeases)
+    .set({ consumedAt: new Date(), consumedImpressionId: event.impressionId })
+    .where(and(eq(adLeases.id, lease.lid), isNull(adLeases.consumedAt)))
+    .returning({ campaignId: adLeases.campaignId });
 
-  const [leaseRow] = await ctx.db
-    .select()
-    .from(adLeases)
-    .where(eq(adLeases.id, lease.lid))
-    .limit(1);
-
-  if (setnx !== "OK" || !leaseRow || leaseRow.consumedAt !== null) {
-    reasons.push(setnx !== "OK" ? "lease_replay" : "lease_already_consumed");
-    await persist(ctx, batchId, userId, event, "rejected", reasons, 0n, leaseRow?.campaignId ?? null);
+  const claimedRow = claimed[0];
+  if (!claimedRow) {
+    reasons.push("lease_already_consumed");
+    await persist(ctx, batchId, userId, event, lease.lid, "rejected", reasons, 0n, lease.cid, geoCluster);
+    return { impressionId: event.impressionId, status: "rejected", earnedMicro: 0, reasons };
+  }
+  const campaignId = claimedRow.campaignId;
+  if (campaignId !== lease.cid) {
+    reasons.push("lease_campaign_mismatch");
+    await persist(ctx, batchId, userId, event, lease.lid, "rejected", reasons, 0n, campaignId, geoCluster);
     return { impressionId: event.impressionId, status: "rejected", earnedMicro: 0, reasons };
   }
 
@@ -145,77 +161,118 @@ async function processEvent(
   if (batchCriticalFindings.length > 0) reasons.push(...batchCriticalFindings.map((f) => f.rule));
 
   const verified = reasons.length === 0 && viewableEnough;
-  const status = verified ? "verified" : batchCriticalFindings.length > 0 ? "flagged" : "rejected";
-  const campaignId = leaseRow.campaignId;
+  const status: "verified" | "rejected" | "flagged" = verified
+    ? "verified"
+    : batchCriticalFindings.length > 0
+      ? "flagged"
+      : "rejected";
 
-  /* ---- Revenue share (55/45) on verified views ---- */
-  let earnedMicro = 0n;
-  if (verified) {
-    const [campaign] = await ctx.db
+  if (!verified) {
+    await persist(ctx, batchId, userId, event, lease.lid, status, reasons, 0n, campaignId, geoCluster);
+    return { impressionId: event.impressionId, status, earnedMicro: 0, reasons };
+  }
+
+  /* ---- Revenue share (55/45) on verified views, budget-gated ---- */
+  const settlement = await ctx.db.transaction(async (tx) => {
+    // Lock the campaign so concurrent views cannot both spend the last dollar.
+    const [campaign] = await tx
       .select()
       .from(campaigns)
       .where(eq(campaigns.id, campaignId))
+      .for("update")
       .limit(1);
-    if (campaign) {
-      earnedMicro = (campaign.cpiMicro * BigInt(REVENUE_SHARE.USER_BPS)) / 10_000n;
-      const platformMicro = campaign.cpiMicro - earnedMicro;
-      const today = new Date().toISOString().slice(0, 10);
+    if (!campaign) return { ok: false as const, reason: "campaign_missing" };
 
-      await ctx.db.transaction(async (tx) => {
-        await postTransfer(tx, {
-          entryType: "advertiser_spend",
-          from: ACCOUNTS.advertiser(campaign.advertiserId),
-          to: ACCOUNTS.platformFloat,
-          amountMicro: campaign.cpiMicro,
-          referenceType: "impression",
-          referenceId: event.impressionId,
-        });
-        await postTransfer(tx, {
-          entryType: "ad_revenue_share",
-          from: ACCOUNTS.platformFloat,
-          to: ACCOUNTS.user(userId),
-          amountMicro: earnedMicro,
-          referenceType: "impression",
-          referenceId: event.impressionId,
-        });
-        await postTransfer(tx, {
-          entryType: "ad_revenue_share",
-          from: ACCOUNTS.platformFloat,
-          to: ACCOUNTS.platformRevenue,
-          amountMicro: platformMicro,
-          referenceType: "impression",
-          referenceId: event.impressionId,
-        });
-        await tx
-          .update(campaigns)
-          .set({
-            spentTodayMicro:
-              campaign.spendDate === today
-                ? sql`${campaigns.spentTodayMicro} + ${campaign.cpiMicro}`
-                : campaign.cpiMicro,
-            spentTotalMicro: sql`${campaigns.spentTotalMicro} + ${campaign.cpiMicro}`,
-            spendDate: today,
-          })
-          .where(eq(campaigns.id, campaign.id));
-        await tx
-          .update(adLeases)
-          .set({ consumedAt: new Date(), consumedImpressionId: event.impressionId })
-          .where(eq(adLeases.id, lease.lid));
-
-        // Vesting check: pay out a pending referral once the referred user
-        // crosses $1.00 in verified views.
-        await maybeQualifyReferral(ctx.db, userId, tx);
-      });
+    const today = new Date().toISOString().slice(0, 10);
+    const spentToday = campaign.spendDate === today ? campaign.spentTodayMicro : 0n;
+    if (spentToday + campaign.cpiMicro > campaign.dailyBudgetMicro) {
+      return { ok: false as const, reason: "campaign_budget_exhausted" };
     }
-  } else {
-    await ctx.db
-      .update(adLeases)
-      .set({ consumedAt: new Date(), consumedImpressionId: event.impressionId })
-      .where(eq(adLeases.id, lease.lid));
+
+    const earnedMicro = (campaign.cpiMicro * BigInt(REVENUE_SHARE.USER_BPS)) / 10_000n;
+    const platformMicro = campaign.cpiMicro - earnedMicro;
+
+    // Idempotency gate: the client UUID is the primary key. A duplicate event
+    // (even one carrying a different valid lease) cannot credit twice.
+    const inserted = await tx
+      .insert(impressions)
+      .values({
+        id: event.impressionId,
+        batchId,
+        leaseId: lease.lid,
+        userId,
+        campaignId,
+        platform: event.platform,
+        placement: event.placement,
+        displayMode: event.displayMode,
+        submittedAt: new Date(event.submittedAt),
+        aiWaitDurationMs: Math.round(event.aiWaitDurationMs),
+        cumulativeVisibleMs: Math.round(event.cumulativeVisibleMs),
+        hoverMs: Math.round(event.hoverMs ?? 0),
+        hoverIntentional: event.hoverIntentional ?? false,
+        geoCluster,
+        earned: true,
+        earnedMicro,
+        status: "verified",
+        rejectionReasons: [],
+        pohi: event.pohi,
+      })
+      .onConflictDoNothing()
+      .returning({ id: impressions.id });
+    if (inserted.length === 0) return { ok: false as const, reason: "impression_duplicate" };
+
+    await postTransfer(tx, {
+      entryType: "advertiser_spend",
+      from: ACCOUNTS.advertiser(campaign.advertiserId),
+      to: ACCOUNTS.platformFloat,
+      amountMicro: campaign.cpiMicro,
+      referenceType: "impression",
+      referenceId: event.impressionId,
+    });
+    await postTransfer(tx, {
+      entryType: "ad_revenue_share",
+      from: ACCOUNTS.platformFloat,
+      to: ACCOUNTS.user(userId),
+      amountMicro: earnedMicro,
+      referenceType: "impression",
+      referenceId: event.impressionId,
+    });
+    await postTransfer(tx, {
+      entryType: "ad_revenue_share",
+      from: ACCOUNTS.platformFloat,
+      to: ACCOUNTS.platformRevenue,
+      amountMicro: platformMicro,
+      referenceType: "impression",
+      referenceId: event.impressionId,
+    });
+
+    await tx
+      .update(campaigns)
+      .set({
+        spentTodayMicro: spentToday + campaign.cpiMicro,
+        spentTotalMicro: campaign.spentTotalMicro + campaign.cpiMicro,
+        spendDate: today,
+      })
+      .where(eq(campaigns.id, campaign.id));
+
+    // Vesting check runs inside the same transaction as the credit.
+    await maybeQualifyReferral(tx, userId);
+
+    return { ok: true as const, earnedMicro };
+  });
+
+  if (!settlement.ok) {
+    reasons.push(settlement.reason);
+    await persist(ctx, batchId, userId, event, lease.lid, "rejected", reasons, 0n, campaignId, geoCluster);
+    return { impressionId: event.impressionId, status: "rejected", earnedMicro: 0, reasons };
   }
 
-  await persist(ctx, batchId, userId, event, status, reasons, earnedMicro, campaignId, geoCluster);
-  return { impressionId: event.impressionId, status, earnedMicro: Number(earnedMicro), reasons };
+  return {
+    impressionId: event.impressionId,
+    status: "verified",
+    earnedMicro: Number(settlement.earnedMicro),
+    reasons,
+  };
 }
 
 async function persist(
@@ -223,6 +280,7 @@ async function persist(
   batchId: string,
   userId: string,
   event: ImpressionEvent,
+  leaseId: string,
   status: "verified" | "rejected" | "flagged",
   reasons: string[],
   earnedMicro: bigint,
@@ -230,12 +288,13 @@ async function persist(
   geoCluster: string = "XX-UNKNOWN",
 ): Promise<void> {
   if (!campaignId) return;
-  await ctx.db
-    .insert(impressions)
-    .values({
+  try {
+    await ctx.db
+      .insert(impressions)
+      .values({
       id: event.impressionId,
       batchId,
-      leaseId: event.leaseToken ? leaseIdFromToken(event.leaseToken) : crypto.randomUUID(),
+      leaseId,
       userId,
       campaignId,
       platform: event.platform,
@@ -247,25 +306,15 @@ async function persist(
       hoverMs: Math.round(event.hoverMs ?? 0),
       hoverIntentional: event.hoverIntentional ?? false,
       geoCluster,
-      earned: status === "verified",
+      earned: false,
       earnedMicro,
       status,
       rejectionReasons: reasons,
-      pohi: event.pohi,
-    })
-    .onConflictDoNothing();
-}
-
-/** Extract the lease id from a verified token's payload without re-verifying. */
-function leaseIdFromToken(token: string): string {
-  const dot = token.lastIndexOf(".");
-  if (dot <= 0) return crypto.randomUUID();
-  try {
-    const body = JSON.parse(Buffer.from(token.slice(0, dot), "base64url").toString()) as {
-      lid?: string;
-    };
-    return body.lid ?? crypto.randomUUID();
+        pohi: event.pohi,
+      })
+      .onConflictDoNothing();
   } catch {
-    return crypto.randomUUID();
+    // Audit rows must never turn a settled event into a 500. The authoritative
+    // credit (if any) already committed in the settlement transaction.
   }
 }

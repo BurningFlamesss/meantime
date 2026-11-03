@@ -4,7 +4,7 @@ import { ViewportTimer } from "./viewport-timer";
 import { HoverTracker } from "./hover-tracker";
 
 const CSS = `
-:host { all: initial; }
+:host { all: initial; color: CanvasText; }
 * { box-sizing: border-box; }
 .mt-wrap {
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -14,6 +14,7 @@ const CSS = `
   background: rgba(127,127,127,.07);
   color: inherit; font-size: 13px; line-height: 1.4;
   max-width: 640px;
+  isolation: isolate;
   transition: opacity .45s ease, transform .45s ease;
 }
 .mt-wrap.mt-fade { opacity: 0; transform: translateY(-4px); pointer-events: none; }
@@ -85,6 +86,8 @@ export class AdWidget {
 
     this.wrap = document.createElement("div");
     this.wrap.className = "mt-wrap";
+    this.wrap.setAttribute("role", "complementary");
+    this.wrap.setAttribute("aria-label", "Sponsored message");
 
     const badge = document.createElement("span");
     badge.className = "mt-badge";
@@ -110,6 +113,7 @@ export class AdWidget {
 
     const progress = document.createElement("div");
     progress.className = "mt-progress";
+    progress.setAttribute("aria-hidden", "true");
     this.progressBar = document.createElement("i");
     progress.append(this.progressBar);
 
@@ -123,11 +127,15 @@ export class AdWidget {
     const snoozeBtn = document.createElement("button");
     snoozeBtn.className = "mt-icon-btn";
     snoozeBtn.title = "Pause MeanTime ads";
+    snoozeBtn.setAttribute("aria-label", "Pause MeanTime ads");
+    snoozeBtn.setAttribute("aria-haspopup", "menu");
+    snoozeBtn.setAttribute("aria-expanded", "false");
     snoozeBtn.textContent = "⏸";
 
     const closeBtn = document.createElement("button");
     closeBtn.className = "mt-icon-btn";
     closeBtn.title = "Dismiss this ad";
+    closeBtn.setAttribute("aria-label", "Dismiss this ad");
     closeBtn.textContent = "×";
     closeBtn.addEventListener("click", () => {
       this.callbacks.onDismiss("dismissed");
@@ -136,6 +144,8 @@ export class AdWidget {
 
     this.menu = document.createElement("div");
     this.menu.className = "mt-menu mt-hidden";
+    this.menu.setAttribute("role", "menu");
+    this.menu.setAttribute("aria-label", "Pause options");
     for (const [label, minutes] of [
       ["Pause for 10 min", 10],
       ["Pause for 15 min", 15],
@@ -143,6 +153,7 @@ export class AdWidget {
       ["Pause until I turn it back on", -1],
     ] as const) {
       const item = document.createElement("button");
+      item.setAttribute("role", "menuitem");
       item.textContent = label;
       item.addEventListener("click", () => {
         this.callbacks.onDismiss("snoozed", minutes);
@@ -150,8 +161,29 @@ export class AdWidget {
       });
       this.menu.append(item);
     }
-    snoozeBtn.addEventListener("click", () => {
-      this.menu.classList.toggle("mt-hidden");
+
+    const setMenuOpen = (open: boolean) => {
+      this.menu.classList.toggle("mt-hidden", !open);
+      snoozeBtn.setAttribute("aria-expanded", String(open));
+    };
+    snoozeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setMenuOpen(this.menu.classList.contains("mt-hidden"));
+    });
+    // Close the menu on outside interaction / Escape without closing the ad.
+    this.shadow.addEventListener(
+      "pointerdown",
+      (e) => {
+        if (this.menu.classList.contains("mt-hidden")) return;
+        const target = e.target as Node | null;
+        if (target && !this.menu.contains(target) && target !== snoozeBtn) setMenuOpen(false);
+      },
+      { capture: true },
+    );
+    this.host.addEventListener("keydown", (e) => {
+      if ((e as KeyboardEvent).key === "Escape" && !this.menu.classList.contains("mt-hidden")) {
+        setMenuOpen(false);
+      }
     });
 
     controls.append(snoozeBtn, closeBtn, this.menu);

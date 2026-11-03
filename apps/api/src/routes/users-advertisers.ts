@@ -6,8 +6,10 @@ import {
   PAYOUT_THRESHOLD_USD,
   SOCIAL_TASK_REWARD_USD,
   campaignInputSchema,
+  clickEventSchema,
   payoutRequestSchema,
   taskSubmissionSchema,
+  verifyLeaseToken,
   type CampaignStats,
   type TaskSubmission,
   type TransparencyLogEntry,
@@ -119,8 +121,12 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext) {
     const auth = requireUser(req, reply, ctx.env.JWT_SECRET);
     if (!auth?.userId) return;
     const body = taskSubmissionSchema.parse(req.body);
-    const { screenshotKey } = req.body as { screenshotKey?: string };
-    if (!screenshotKey) return reply.code(400).send({ error: "screenshot_required" });
+    const { screenshotKey } = body;
+    // A presigned key is scoped to the uploader; reject keys from other users
+    // so one account cannot claim another account's proof.
+    if (!screenshotKey.startsWith(`task-proofs/${auth.userId}/`)) {
+      return reply.code(400).send({ error: "invalid_screenshot_key" });
+    }
 
     const [user] = await ctx.db
       .select()
@@ -136,37 +142,49 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext) {
       accountAgeDays: user ? (Date.now() - user.createdAt.getTime()) / 86_400_000 : 0,
     });
 
-    const [task] = await ctx.db
-      .insert(socialTasks)
-      .values({
-        userId: auth.userId,
-        taskType: body.taskType,
-        postUrl: body.postUrl,
-        screenshotKey,
-        rewardMicro: BigInt(SOCIAL_TASK_REWARD_USD),
-        status: moderation.decision === "auto_approved" ? "approved" : moderation.decision === "auto_rejected" ? "rejected" : "pending",
-        moderationDecision: moderation.decision,
-        moderationScore: moderation.score,
-        moderationReasons: moderation.reasons,
-      })
-      .returning();
+    const status =
+      moderation.decision === "auto_approved"
+        ? "approved"
+        : moderation.decision === "auto_rejected"
+          ? "rejected"
+          : "pending";
 
-    // Auto-approved tasks credit immediately through the ledger.
-    if (moderation.decision === "auto_approved" && task) {
-      await ctx.db.transaction(async (tx) => {
+    // Insert and (if approved) pay in one transaction. The unique (user, post)
+    // index makes a duplicate submission a no-op instead of a second reward.
+    const task = await ctx.db.transaction(async (tx) => {
+      const [created] = await tx
+        .insert(socialTasks)
+        .values({
+          userId: auth.userId!,
+          taskType: body.taskType,
+          postUrl: body.postUrl,
+          screenshotKey,
+          rewardMicro: BigInt(SOCIAL_TASK_REWARD_USD),
+          status,
+          moderationDecision: moderation.decision,
+          moderationScore: moderation.score,
+          moderationReasons: moderation.reasons,
+        })
+        .onConflictDoNothing()
+        .returning();
+      if (!created) return null;
+
+      if (status === "approved") {
         await postTransfer(tx, {
           entryType: "social_task_reward",
           from: ACCOUNTS.platformPromoLiability,
           to: ACCOUNTS.user(auth.userId!),
           amountMicro: BigInt(SOCIAL_TASK_REWARD_USD),
           referenceType: "social_task",
-          referenceId: task.id,
+          referenceId: created.id,
           memo: `Social task (${body.taskType}) auto-approved by Laya`,
         });
-      });
-    }
+      }
+      return created;
+    });
 
-    return { taskId: task?.id, status: task?.status, moderation };
+    if (!task) return reply.code(409).send({ error: "already_submitted" });
+    return { taskId: task.id, status: task.status, moderation };
   });
 
   app.get("/tasks/mine", async (req, reply) => {
@@ -187,81 +205,101 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext) {
     if (!auth?.userId) return;
     const userId = auth.userId;
     const body = payoutRequestSchema.parse(req.body);
-
-    const available = await balanceOf(ctx.db, ACCOUNTS.user(userId));
-    if (available < BigInt(PAYOUT_THRESHOLD_USD)) {
-      return reply.code(400).send({ error: "below_threshold", thresholdMicro: PAYOUT_THRESHOLD_USD });
-    }
-    if (BigInt(body.amountMicro) > available) {
-      return reply.code(400).send({ error: "insufficient_balance" });
-    }
-
-    const [user] = await ctx.db.select().from(users).where(eq(users.id, userId)).limit(1);
-    if (user?.isFrozen) return reply.code(403).send({ error: "account_frozen" });
-
+    const amountMicro = BigInt(body.amountMicro);
     const addressNormalized = body.address.trim().toLowerCase();
-
-    // Layer 5: one payout address = one account.
-    const conflict = await ctx.db
-      .select({ userId: payoutDestinations.userId })
-      .from(payoutDestinations)
-      .where(and(eq(payoutDestinations.addressNormalized, addressNormalized), sql`${payoutDestinations.userId} <> ${userId}`))
-      .limit(1);
-    if (conflict.length > 0) {
-      await logFraud(ctx.db, {
-        userId,
-        severity: "critical",
-        rule: "sybil_payout_address",
-        detail: { addressNormalized },
-      });
-      return reply.code(409).send({ error: "address_in_use" });
-    }
-
-    const [dest] = await ctx.db
-      .insert(payoutDestinations)
-      .values({ userId, method: body.method, addressNormalized, addressDisplay: body.address })
-      .onConflictDoNothing()
-      .returning();
-    const destinationId = dest?.id ?? (
-      await ctx.db
-        .select()
-        .from(payoutDestinations)
-        .where(and(eq(payoutDestinations.userId, userId), eq(payoutDestinations.addressNormalized, addressNormalized)))
-        .limit(1)
-    )[0]?.id;
-    if (!destinationId) return reply.code(500).send({ error: "destination_failed" });
 
     const trust = await computeTrustScore(ctx.db, userId);
     const verdict = verdictFor(trust.total);
-
     const status =
       verdict === "auto_approve" ? "approved" : verdict === "manual_review" ? "auditing" : "frozen";
 
-    const [request] = await ctx.db
-      .insert(payoutRequests)
-      .values({
-        userId,
-        destinationId,
-        amountMicro: BigInt(body.amountMicro),
-        status,
-        trustScoreAtRequest: trust.total,
-        trustBreakdown: trust as unknown as Record<string, unknown>,
-      })
-      .returning();
-    if (!request) return reply.code(500).send({ error: "request_failed" });
+    // The user row is the per-user mutex. Balance, open-request and destination
+    // checks all run under it, so two concurrent withdrawals can never both
+    // pass the balance check and overdraw the account.
+    const outcome = await ctx.db.transaction(async (tx) => {
+      const [user] = await tx
+        .select()
+        .from(users)
+        .where(eq(users.id, userId))
+        .for("update")
+        .limit(1);
+      if (!user) return { error: "user_missing" } as const;
+      if (user.isFrozen) return { error: "account_frozen" } as const;
 
-    if (status !== "frozen") {
-      await ctx.db.transaction(async (tx) => {
+      const open = await tx
+        .select({ id: payoutRequests.id })
+        .from(payoutRequests)
+        .where(and(eq(payoutRequests.userId, userId), sql`${payoutRequests.status} in ('requested','auditing')`))
+        .limit(1);
+      if (open.length > 0) return { error: "payout_in_progress" } as const;
+
+      const available = await balanceOf(tx, ACCOUNTS.user(userId));
+      if (available < BigInt(PAYOUT_THRESHOLD_USD)) {
+        return { error: "below_threshold" } as const;
+      }
+      if (amountMicro > available) return { error: "insufficient_balance" } as const;
+
+      // Layer 5: one payout address = one account. The unique index is the
+      // final arbiter; this check gives a clean 409 in the common case.
+      const conflict = await tx
+        .select({ userId: payoutDestinations.userId })
+        .from(payoutDestinations)
+        .where(
+          and(
+            eq(payoutDestinations.method, body.method),
+            eq(payoutDestinations.addressNormalized, addressNormalized),
+            sql`${payoutDestinations.userId} <> ${userId}`,
+          ),
+        )
+        .limit(1);
+      if (conflict.length > 0) return { error: "address_in_use" } as const;
+
+      const [dest] = await tx
+        .insert(payoutDestinations)
+        .values({ userId, method: body.method, addressNormalized, addressDisplay: body.address })
+        .onConflictDoNothing()
+        .returning();
+      const destinationId =
+        dest?.id ??
+        (
+          await tx
+            .select()
+            .from(payoutDestinations)
+            .where(
+              and(
+                eq(payoutDestinations.userId, userId),
+                eq(payoutDestinations.method, body.method),
+                eq(payoutDestinations.addressNormalized, addressNormalized),
+              ),
+            )
+            .limit(1)
+        )[0]?.id;
+      if (!destinationId) return { error: "address_in_use" } as const;
+
+      const [request] = await tx
+        .insert(payoutRequests)
+        .values({
+          userId,
+          destinationId,
+          amountMicro,
+          status,
+          trustScoreAtRequest: trust.total,
+          trustBreakdown: trust as unknown as Record<string, unknown>,
+        })
+        .returning();
+      if (!request) return { error: "request_failed" } as const;
+
+      if (status !== "frozen") {
         await postTransfer(tx, {
           entryType: "payout_debit",
           from: ACCOUNTS.user(userId),
           to: ACCOUNTS.platformFloat,
-          amountMicro: BigInt(body.amountMicro),
+          amountMicro,
           referenceType: "payout",
           referenceId: request.id,
         });
         // Unlock the pending welcome bonus once the user has crossed the threshold.
-        const pending = await balanceOf(ctx.db, ACCOUNTS.userPending(userId));
+        const pending = await balanceOf(tx, ACCOUNTS.userPending(userId));
         if (pending > 0n) {
           await postTransfer(tx, {
             entryType: "welcome_bonus",
@@ -273,8 +311,35 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext) {
             memo: "Welcome bonus unlocked at withdrawal threshold",
           });
         }
-      });
-    } else {
+      }
+
+      return { request } as const;
+    });
+
+    if ("error" in outcome) {
+      if (outcome.error === "account_frozen") return reply.code(403).send({ error: outcome.error });
+      if (outcome.error === "payout_in_progress" || outcome.error === "address_in_use") {
+        if (outcome.error === "address_in_use") {
+          await logFraud(ctx.db, {
+            userId,
+            severity: "critical",
+            rule: "sybil_payout_address",
+            detail: { addressNormalized },
+          });
+        }
+        return reply.code(409).send({ error: outcome.error });
+      }
+      if (outcome.error === "below_threshold") {
+        return reply.code(400).send({ error: outcome.error, thresholdMicro: PAYOUT_THRESHOLD_USD });
+      }
+      if (outcome.error === "insufficient_balance") {
+        return reply.code(400).send({ error: outcome.error });
+      }
+      return reply.code(400).send({ error: outcome.error });
+    }
+
+    const request = outcome.request;
+    if (request.status === "frozen") {
       await logFraud(ctx.db, {
         userId,
         severity: "critical",
@@ -526,23 +591,49 @@ export async function advertiserRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post("/ads/click", async (req, reply) => {
     const auth = requireUser(req, reply, ctx.env.JWT_SECRET);
     if (!auth?.userId) return;
-    const { impressionId, leaseToken } = req.body as { impressionId?: string; leaseToken?: string };
-    if (!impressionId || !leaseToken) return reply.code(400).send({ error: "invalid" });
-    const dot = leaseToken.lastIndexOf(".");
-    let campaignId = "";
-    try {
-      const payload = JSON.parse(Buffer.from(leaseToken.slice(0, dot), "base64url").toString()) as { cid?: string };
-      campaignId = payload.cid ?? "";
-    } catch {
-      return reply.code(400).send({ error: "invalid" });
+    const body = clickEventSchema.parse(req.body);
+
+    // A click is only meaningful when it is signed by the server and belongs
+    // to a verified impression owned by this user. Never parse-and-trust.
+    const verification = await verifyLeaseToken(
+      body.leaseToken,
+      ctx.env.LEASE_HMAC_SECRET,
+      Math.floor(Date.now() / 1000),
+    );
+    if (!verification.ok || !verification.payload) {
+      return reply.code(400).send({ error: "invalid_lease" });
     }
-    if (!campaignId) return reply.code(400).send({ error: "invalid" });
+    const lease = verification.payload;
+    if (lease.uid !== auth.userId) return reply.code(403).send({ error: "lease_user_mismatch" });
+
+    const [impression] = await ctx.db
+      .select({ id: impressions.id, campaignId: impressions.campaignId })
+      .from(impressions)
+      .where(
+        and(
+          eq(impressions.id, body.impressionId),
+          eq(impressions.userId, auth.userId),
+          eq(impressions.leaseId, lease.lid),
+          eq(impressions.earned, true),
+        ),
+      )
+      .limit(1);
+    if (!impression) return reply.code(409).send({ error: "impression_not_verified" });
+    if (impression.campaignId !== lease.cid) return reply.code(409).send({ error: "campaign_mismatch" });
+
     // Geo from request IP; raw IP is resolved to a cluster and discarded.
     const geo = resolveGeo(req.ip);
-    await ctx.db
+    const inserted = await ctx.db
       .insert(clickEvents)
-      .values({ impressionId, campaignId, userId: auth.userId, geoCluster: geo.cluster });
-    return { ok: true };
+      .values({
+        impressionId: impression.id,
+        campaignId: impression.campaignId,
+        userId: auth.userId,
+        geoCluster: geo.cluster,
+      })
+      .onConflictDoNothing()
+      .returning({ id: clickEvents.id });
+    return { ok: true, duplicate: inserted.length === 0 };
   });
 
   /* ------------------- advertiser analytics (per geo) ------------------- */

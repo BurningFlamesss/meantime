@@ -80,7 +80,7 @@ export async function postTransfer(
   });
 }
 
-export async function balanceOf(db: Db, account: string): Promise<bigint> {
+export async function balanceOf(db: Db | LedgerTx, account: string): Promise<bigint> {
   const rows = await db
     .select({ sum: sql<string>`coalesce(sum(${ledgerEntries.amountMicro}), 0)` })
     .from(ledgerEntries)

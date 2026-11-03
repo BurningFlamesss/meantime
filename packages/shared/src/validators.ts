@@ -57,7 +57,7 @@ export const campaignInputSchema = z.object({
   headline: z.string().min(4).max(AD_COPY_LIMITS.HEADLINE_MAX),
   bodyText: z.string().min(10).max(AD_COPY_LIMITS.BODY_MAX),
   ctaText: z.string().min(2).max(AD_COPY_LIMITS.CTA_MAX),
-  targetUrl: z.string().url().max(512),
+  targetUrl: httpUrlSchema.max(512),
   dailyBudgetMicro: z.number().int().positive().max(1_000_000_000_000),
   cpiMicro: z.number().int().positive().max(100_000_000),
   targetPlatforms: z.array(z.string().max(32)).min(1).max(8),
@@ -82,15 +82,33 @@ export const loginSchema = z.object({
   fingerprintHash: z.string().min(8).max(128).optional(),
 });
 
+/**
+ * Ads and task proofs must point at a normal web page. Zod's `.url()` accepts
+ * any scheme (`javascript:`, `data:`, `file:`), which would let a campaign send
+ * the extension or a reviewer somewhere dangerous, so the scheme is pinned.
+ */
+export const httpUrlSchema = z
+  .string()
+  .url()
+  .max(1024)
+  .refine((value) => /^https?:\/\//i.test(value), { message: "must_be_http_url" });
+
 export const taskSubmissionSchema = z.object({
   taskType: z.enum(["x", "linkedin", "reddit", "chrome_web_store", "other"]),
-  postUrl: z.string().url().max(1024),
+  postUrl: httpUrlSchema,
+  /** Object key returned by /tasks/presign; must live under the user's prefix. */
+  screenshotKey: z
+    .string()
+    .min(24)
+    .max(256)
+    .regex(/^task-proofs\/[0-9a-f-]{36}\/[0-9a-f-]{36}$/i, "invalid_screenshot_key"),
 });
 
 export const payoutRequestSchema = z.object({
   method: z.enum(["paypal", "stripe_connect", "wise", "usdc", "usdt"]),
   address: z.string().min(4).max(256),
-  amountMicro: z.number().int().positive(),
+  // Bounded to keep every amount well inside Number.MAX_SAFE_INTEGER.
+  amountMicro: z.number().int().positive().max(1_000_000_000_000),
 });
 
 export const clickEventSchema = z.object({
