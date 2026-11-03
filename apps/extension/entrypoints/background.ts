@@ -71,9 +71,13 @@ class MeanTimeBackground {
     platform?: string;
   }): Promise<unknown> {
     switch (msg.type) {
-      case "take_ad":
+      case "take_ad": {
+        // Signed-out installs must not show cached ads.
+        const identity = await storageGet<Identity | null>(STORAGE_KEYS.IDENTITY, null);
+        if (!identity) return null;
         if (msg.platform) await storageSet(LAST_PLATFORM_KEY, msg.platform);
         return takeAd(Date.now(), msg.platform);
+      }
       case "return_ad":
         if (msg.ad) await requeueAd(msg.ad);
         return null;

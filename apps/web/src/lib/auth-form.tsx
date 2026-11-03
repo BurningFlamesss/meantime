@@ -6,8 +6,18 @@ interface AuthResponse {
   accessToken: string;
 }
 
-/** Shared email/password form for /sign-in and /sign-up. */
-export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
+/**
+ * Shared email/password form for /sign-in and /sign-up. `referralCode` arrives
+ * from a `/r/<code>` link and is only sent on registration; the server decides
+ * whether the attribution is legitimate (self-referrals are dropped).
+ */
+export function AuthForm({
+  mode,
+  referralCode,
+}: {
+  mode: "sign-in" | "sign-up";
+  referralCode?: string;
+}) {
   const navigate = useNavigate();
   const registering = mode === "sign-up";
   const [email, setEmail] = useState("");
@@ -22,7 +32,11 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
     try {
       const res = await api<AuthResponse>(registering ? "/auth/register" : "/auth/login", {
         method: "POST",
-        json: { email: email.trim().toLowerCase(), password },
+        json: {
+          email: email.trim().toLowerCase(),
+          password,
+          ...(registering && referralCode ? { referralCode } : {}),
+        },
       });
       setToken(res.accessToken);
       await navigate({ to: "/dashboard" });
@@ -98,6 +112,12 @@ export function AuthForm({ mode }: { mode: "sign-in" | "sign-up" }) {
               />
               {registering && (
                 <p className="mt-1 text-xs text-neutral-400">At least 10 characters.</p>
+              )}
+              {registering && referralCode && (
+                <p className="mt-2 rounded-lg border border-neutral-200 bg-neutral-50 p-2 text-xs text-neutral-600">
+                  Referral code <span className="font-medium text-neutral-900">{referralCode}</span> will be
+                  applied. The bonus vests only after you earn $1.00 in verified views.
+                </p>
               )}
             </div>
             {error && (

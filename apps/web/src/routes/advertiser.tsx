@@ -6,7 +6,14 @@ import {
   type CampaignInput,
   type ModerationOutcome,
 } from "@meantime/shared";
-import { api } from "../lib/api";
+import {
+  ApiError,
+  api,
+  apiAsAdvertiser,
+  clearAdvertiserToken,
+  getAdvertiserToken,
+  setAdvertiserToken,
+} from "../lib/api";
 import { formatMicroCents, formatMs } from "../lib/format";
 import { Shell, PageHeader } from "../lib/shell";
 import { Stat, Badge, Empty, Table } from "../lib/ui";
@@ -43,7 +50,134 @@ interface VariantRow {
   avgRetentionMs: number;
 }
 
+/**
+ * The portal runs on an advertiser token, which is stored separately from the
+ * viewer session: signing in here never signs the user out of their earnings
+ * dashboard, and a viewer token can never create or read campaigns.
+ */
 function AdvertiserPortal() {
+  const [authed, setAuthed] = useState<boolean | null>(null);
+
+  // localStorage is read after mount so SSR output and hydration agree.
+  useEffect(() => {
+    setAuthed(!!getAdvertiserToken());
+  }, []);
+
+  if (authed === null) {
+    return (
+      <Shell>
+        <PageHeader title="Advertiser portal" />
+        <p className="text-sm text-neutral-400">—</p>
+      </Shell>
+    );
+  }
+  if (!authed) return <AdvertiserAuth onAuthed={() => setAuthed(true)} />;
+  return <AdvertiserPortalContent onSignedOut={() => setAuthed(false)} />;
+}
+
+function AdvertiserAuth({ onAuthed }: { onAuthed: () => void }) {
+  const [registering, setRegistering] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [companyName, setCompanyName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent): Promise<void> {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    try {
+      const res = await api<{ accessToken: string }>(
+        registering ? "/advertiser/register" : "/advertiser/login",
+        {
+          method: "POST",
+          json: registering
+            ? { email: email.trim().toLowerCase(), password, companyName: companyName.trim() }
+            : { email: email.trim().toLowerCase(), password },
+        },
+      );
+      setAdvertiserToken(res.accessToken);
+      setPassword("");
+      onAuthed();
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.status === 409
+            ? "An advertiser with that email already exists."
+            : err.status === 401
+              ? "Email or password is incorrect."
+              : err.status === 429
+                ? "Too many attempts. Try again in a few minutes."
+                : err.status === 400
+                  ? "Check the form — passwords need at least 10 characters."
+                  : "Could not reach the server. Try again."
+          : "Could not reach the server. Try again.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Shell>
+      <PageHeader
+        title="Advertiser portal"
+        description="Text-only micro-campaigns during AI wait time. Bid per verified 5-second human view."
+      />
+      <div className="max-w-md">
+        <form onSubmit={submit} className="card-pad space-y-4">
+          <h2 className="text-sm font-semibold text-neutral-900">
+            {registering ? "Create an advertiser account" : "Advertiser sign in"}
+          </h2>
+          <div>
+            <label className="label" htmlFor="adv-email">Work email</label>
+            <input id="adv-email" className="input" type="email" autoComplete="email" required
+              value={email} onChange={(e) => setEmail(e.target.value)} />
+          </div>
+          {registering && (
+            <div>
+              <label className="label" htmlFor="adv-company">Company</label>
+              <input id="adv-company" className="input" required maxLength={80}
+                value={companyName} onChange={(e) => setCompanyName(e.target.value)} />
+            </div>
+          )}
+          <div>
+            <label className="label" htmlFor="adv-password">Password</label>
+            <input id="adv-password" className="input" type="password" required
+              autoComplete={registering ? "new-password" : "current-password"}
+              minLength={registering ? 10 : 1}
+              value={password} onChange={(e) => setPassword(e.target.value)} />
+            {registering && (
+              <p className="mt-1 text-xs text-neutral-400">At least 10 characters.</p>
+            )}
+          </div>
+          {error && (
+            <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              {error}
+            </p>
+          )}
+          <button type="submit" disabled={busy} className="btn-primary w-full">
+            {busy ? "Please wait…" : registering ? "Create advertiser account" : "Sign in"}
+          </button>
+          <p className="text-sm text-neutral-500">
+            {registering ? "Already advertise with us?" : "New advertiser?"}{" "}
+            <button type="button" onClick={() => { setRegistering(!registering); setError(null); }}
+              className="text-accent">
+              {registering ? "Sign in" : "Create an account"}
+            </button>
+          </p>
+        </form>
+        <p className="mt-4 text-xs text-neutral-400">
+          Advertiser accounts are separate from viewer accounts. Campaign copy is
+          moderated before it can serve.
+        </p>
+      </div>
+    </Shell>
+  );
+}
+
+function AdvertiserPortalContent({ onSignedOut }: { onSignedOut: () => void }) {
   const [campaigns, setCampaigns] = useState<CampaignRow[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [analytics, setAnalytics] = useState<CampaignAnalytics | null>(null);
@@ -66,9 +200,21 @@ function AdvertiserPortal() {
     targetGeoClusters: [],
   });
 
+  /** A rejected advertiser token returns the portal to its sign-in form. */
+  function handleAuthFailure(err: unknown): void {
+    if (err instanceof ApiError && err.status === 401) {
+      clearAdvertiserToken();
+      onSignedOut();
+    }
+  }
+
   async function refresh(): Promise<void> {
-    const rows = await api<CampaignRow[]>("/advertiser/campaigns").catch(() => []);
-    setCampaigns(rows);
+    try {
+      setCampaigns(await apiAsAdvertiser<CampaignRow[]>("/advertiser/campaigns"));
+    } catch (err) {
+      handleAuthFailure(err);
+      setCampaigns([]);
+    }
   }
 
   useEffect(() => {
@@ -77,12 +223,18 @@ function AdvertiserPortal() {
 
   useEffect(() => {
     if (!selected) return;
-    api<CampaignAnalytics>(`/advertiser/campaigns/${selected}/analytics`)
+    apiAsAdvertiser<CampaignAnalytics>(`/advertiser/campaigns/${selected}/analytics`)
       .then(setAnalytics)
-      .catch(() => setAnalytics(null));
-    api<VariantRow[]>(`/advertiser/campaigns/${selected}/variants`)
+      .catch((err: unknown) => {
+        handleAuthFailure(err);
+        setAnalytics(null);
+      });
+    apiAsAdvertiser<VariantRow[]>(`/advertiser/campaigns/${selected}/variants`)
       .then(setVariants)
-      .catch(() => setVariants([]));
+      .catch((err: unknown) => {
+        handleAuthFailure(err);
+        setVariants([]);
+      });
   }, [selected]);
 
   async function createCampaign(e: React.FormEvent): Promise<void> {
@@ -90,10 +242,10 @@ function AdvertiserPortal() {
     setMessage(null);
     setModeration(null);
     try {
-      const res = await api<{ campaign: { id: string }; moderation: ModerationOutcome }>(
-        "/advertiser/campaigns",
-        { method: "POST", json: form },
-      );
+      const res = await apiAsAdvertiser<{
+        campaign: { id: string };
+        moderation: ModerationOutcome;
+      }>("/advertiser/campaigns", { method: "POST", json: form });
       setModeration(res.moderation);
       setMessage(
         res.moderation.decision === "auto_approved"
@@ -105,6 +257,7 @@ function AdvertiserPortal() {
       await refresh();
       setSelected(res.campaign.id);
     } catch (err) {
+      handleAuthFailure(err);
       setMessage(String(err));
     }
   }
@@ -114,7 +267,7 @@ function AdvertiserPortal() {
     if (!selected) return;
     setVariantMsg(null);
     try {
-      const res = await api<{ moderation: ModerationOutcome }>(
+      const res = await apiAsAdvertiser<{ moderation: ModerationOutcome }>(
         `/advertiser/campaigns/${selected}/variants`,
         { method: "POST", json: variantForm },
       );
@@ -127,9 +280,12 @@ function AdvertiserPortal() {
       );
       setShowVariantForm(false);
       setVariantForm({ headline: "", bodyText: "", ctaText: "Learn more" });
-      const rows = await api<VariantRow[]>(`/advertiser/campaigns/${selected}/variants`);
+      const rows = await apiAsAdvertiser<VariantRow[]>(
+        `/advertiser/campaigns/${selected}/variants`,
+      );
       setVariants(rows);
     } catch (err) {
+      handleAuthFailure(err);
       setVariantMsg(String(err));
     }
   }
@@ -145,10 +301,21 @@ function AdvertiserPortal() {
 
   return (
     <Shell>
-      <PageHeader
-        title="Advertiser portal"
-        description="Text-only micro-campaigns during AI wait time. Bid per verified 5-second human view."
-      />
+      <div className="flex items-start justify-between gap-4">
+        <PageHeader
+          title="Advertiser portal"
+          description="Text-only micro-campaigns during AI wait time. Bid per verified 5-second human view."
+        />
+        <button
+          onClick={() => {
+            clearAdvertiserToken();
+            onSignedOut();
+          }}
+          className="btn-outline shrink-0 text-xs"
+        >
+          Sign out
+        </button>
+      </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
         {/* Left: create form */}

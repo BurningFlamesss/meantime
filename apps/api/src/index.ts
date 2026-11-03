@@ -7,6 +7,7 @@ import { authRoutes, adsRoutes } from "./routes/auth-ads.js";
 import { telemetryRoutes } from "./routes/telemetry.js";
 import { userRoutes, advertiserRoutes } from "./routes/users-advertisers.js";
 import { advertiserListRoutes } from "./routes/advertiser-list.js";
+import { advertiserAuthRoutes } from "./routes/advertiser-auth.js";
 import { adminRoutes } from "./routes/admin.js";
 
 async function main(): Promise<void> {
@@ -62,6 +63,7 @@ async function main(): Promise<void> {
   await adsRoutes(app, ctx);
   await telemetryRoutes(app, ctx);
   await userRoutes(app, ctx);
+  await advertiserAuthRoutes(app, ctx);
   await advertiserRoutes(app, ctx);
   await advertiserListRoutes(app, ctx);
   await adminRoutes(app, ctx);

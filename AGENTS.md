@@ -329,20 +329,12 @@ curl -s -X POST http://localhost:3001/ads/prefetch \
 These are real gaps in the current repository. Check whether they still apply
 before relying on the related flow:
 
-- No web sign-in/sign-up screens; `localStorage["mt_token"]` must be set
-  manually.
-- No extension onboarding/login; the `identity` storage key is never written by
-  the UI.
-- No advertiser register/login endpoint or UI.
-- No `/r/:code` referral landing route or signup attribution UI.
-- No reviewer/admin UI for `needs_review` content or frozen payouts.
+- Reviewer access is a shared operator key, not per-reviewer accounts.
 - No payout processor settlement.
-- No automated tests.
-- No rate limiting or refresh-token rotation.
-- Task-proof screenshots are not analysed by the text-only Laya model, so they
-  always land in `needs_review`.
+- No automated tests in the repository.
+- Task-proof image contents are not analysed by the text-only Laya model; only
+  upload existence/type/size is validated, so approval still needs a human.
 - `users.signupIp` stores a raw IP (legacy).
-- `POST /ads/click` does not verify the lease signature.
 - Prefetch performs N+1 variant queries.
 - `@meantime/shared` must be built before production start.
 

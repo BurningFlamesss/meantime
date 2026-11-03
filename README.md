@@ -36,6 +36,15 @@ pnpm --filter @meantime/web dev
 pnpm --filter @meantime/extension build
 ```
 
+First run is self-service: click the extension icon and create an account (or
+sign in) in the popup. No storage edits or devtools are needed. The web app has
+the same flow at `/sign-up` and `/sign-in`; both share the API account.
+
+Advertisers use a separate account and token: `/advertiser` shows its own
+sign-up/sign-in gate. The seeded demo advertiser is `demo@advertiser.test` /
+`demo-advertiser-pass-123`. Referral links (`/r/<code>`) land on sign-up with
+the code attached.
+
 ## The 3-pillar extension engine
 
 1. **Idle prefetch & local registry.** The background service worker only
@@ -57,6 +66,14 @@ pnpm --filter @meantime/extension build
    5,000ms cumulative pays out. Completed impressions queue locally and flush
    as one compressed batch every 15 minutes or 15 items — never one request
    per view.
+
+**Device footprint.** No model ships to the browser — Laya runs entirely on the
+API host. The full MV3 bundle is ~186 KB (94 KB content script, 74 KB service
+worker, 9 KB popup); the popup is only loaded when opened. The cache is capped
+at 25 ads, telemetry at 200 events, and the viewport `requestAnimationFrame`
+loop stops whenever the ad is not actively visible. Ads appear only after a
+prompt is sent, one per tab, and can be dismissed, snoozed, or switched off;
+a signed-out install never shows cached ads.
 
 ## Anti-fraud layers
 

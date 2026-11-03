@@ -693,30 +693,25 @@ erDiagram
 
 These are tracked as tasks in [TASKS.md](./TASKS.md).
 
-1. No web sign-in/sign-up screens; dashboard calls fail without a manually
-   inserted `mt_token`.
-2. No extension onboarding/login; `identity` is never written by the UI.
-3. No advertiser register/login endpoint or UI.
-4. No referral landing route (`/r/:code`) or signup attribution UI.
-5. No web sign-in or extension onboarding still means tokens must be supplied
-   manually for those surfaces; reviewer access is a shared operator key, not
-   per-reviewer accounts.
-6. No real payout processor; requests stop at `approved`/`auditing`.
-7. No automated test suite in the repository (the verification runs used
+1. No advertiser register/login endpoint or UI.
+2. No referral landing route (`/r/:code`) or signup attribution UI.
+3. Reviewer access is a shared operator key, not per-reviewer accounts.
+4. No real payout processor; requests stop at `approved`/`auditing`.
+5. No automated test suite in the repository (the verification runs used
    standalone Playwright and Node scripts).
-8. CSRF protection is unnecessary for the bearer-only flow today; email
+6. CSRF protection is unnecessary for the bearer-only flow today; email
    verification and password reset are not implemented.
-9. `users.signupIp` stores a raw IP; it should be removed/hashed.
-10. Prefetch performs an N+1 query for variants and loads all active campaigns
-    before filtering in memory.
-11. Laya is a text model, so task-proof image contents are not interpreted;
-    upload existence/type/size are validated, but approval always needs a human
-    (`screenshot_unverified`).
-12. The local `infra/laya-stub` is an offline protocol test double, not a
+7. `users.signupIp` stores a raw IP; it should be removed/hashed.
+8. Prefetch performs an N+1 query for variants and loads all active campaigns
+   before filtering in memory.
+9. Laya is a text model, so task-proof image contents are not interpreted;
+   upload existence/type/size are validated, but approval always needs a human
+   (`screenshot_unverified`).
+10. The local `infra/laya-stub` is an offline protocol test double, not a
     classifier; production must run the real upstream image.
-13. `@meantime/shared` is built output-linked, so a fresh clone must build
+11. `@meantime/shared` is built output-linked, so a fresh clone must build
     before starting production artifacts (Turbo handles this).
-14. Referral attribution rejects signups whose hashed IP overlaps the
+12. Referral attribution rejects signups whose hashed IP overlaps the
     referrer's, so a successful referral cannot be exercised from a single
     machine/egress IP.
 
@@ -737,6 +732,15 @@ the HF cache) on `127.0.0.1:8000`. The offline `/v1/systemone` test double on
 Verified:
 
 - `pnpm typecheck` and `pnpm build` pass for all workspaces, uncached.
+- First-run onboarding: a fresh Chromium profile signed up in the popup, stored
+  identity/device/refresh tokens, prefetched 25 ads, mounted and earned on an
+  ad, stayed signed in across a popup reload, and sign-out cleared the session
+  and cached ads (19/19 checks).
+- Web auth: `/sign-up` → dashboard with the $1.00 pending balance, sign-out
+  clears the token, and sign-in restores the session (7/7 checks).
+- Device footprint: the complete MV3 bundle is 185.5 KB (94 KB content script,
+  74 KB service worker, 9 KB popup); no model or LLM runtime ships to the
+  browser. Laya runs only on the API host.
 - Auth: registration/login issue rotating refresh sessions; reuse of a rotated
   token is rejected; logout revokes it; the register and login limits return
   `429` at their bounds.

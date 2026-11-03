@@ -13,14 +13,14 @@ private beta · P2 = post-launch / polish
 |---|---|---|
 | Shared contracts, schema, crypto, selectors | `[x]` | `pnpm typecheck` + `pnpm build` pass. |
 | Fastify API and fraud engine | `[x]` verified | Against PostgreSQL 18: register/login, prefetch, telemetry (verified, replay, forged lease, low PoHI, below threshold), balance, impressions, referrals, tasks presign, payouts threshold, advertiser create/list/variants/stats/analytics/click. |
-| TanStack Start web app | `[x]` code / `[~]` auth | Production SSR bundle serves all routes with 200. Authenticated routes still need a manually set token (T-01). |
-| WXT extension | `[x]` verified | `.output/chrome-mv3` builds (176.07 KB) and was loaded in real Chromium via Playwright: ad injection, 5 s persistence, telemetry, and payment all passed. |
+| TanStack Start web app | `[x]` verified | Production SSR bundle serves all routes with 200. `/sign-up`, `/sign-in`, dashboard, sign-out, and sign-in-again passed 7/7 in Chromium. Advertiser sign-up/sign-in and `/r/:code` referral attribution added. |
+| WXT extension | `[x]` verified | `.output/chrome-mv3` builds (185.5 KB; 94 KB content, 74 KB worker, 9 KB popup) and was loaded in real Chromium: first-run popup sign-up, prefetch, ad injection, 5 s payment, reload persistence, and sign-out all passed 19/19. |
 | Database migrations | `[x]` applied | `apps/api/drizzle/0000_uneven_tag.sql`, 17 tables, applied to PostgreSQL 18. |
 | Demo seed | `[x]` run | 1 advertiser + 2 active campaigns inserted. |
 | Docker compose | `[!]` not run | Docker is not installed in the authoring environment (no root, no Docker socket). Verified with an embedded PostgreSQL + host-run Laya instead. |
 | Laya moderation | `[x]` real model | The pinned upstream `v0.4.21` `laya-serve` was run from source with CPU torch and the English checkpoint on `:8000`. Clean copy → 92/`auto_approved`, crypto/prize scams → 0–36/`auto_rejected`, clean task link → `needs_review`. The Docker image itself is still unbuilt. |
 | Automated tests | `[ ]` | No test suite exists. |
-| Auth/onboarding UX | `[ ]` | Blocks a true end-to-end demo. |
+| Auth/onboarding UX | `[x]` | Web sign-up/sign-in/sign-out and first-run popup onboarding work without manual storage edits. |
 
 ---
 
@@ -52,6 +52,9 @@ private beta · P2 = post-launch / polish
 - [x] PoHI keystroke/paste counters (no prompt text).
 - [x] Batched telemetry queue with deflate compression.
 - [x] Popup settings, cache/pending/balance stats.
+- [x] First-run popup sign-up/sign-in with a random install id; stores identity
+      and refreshes tokens automatically. Sign-out flushes telemetry, clears
+      cached ads and frequency history, and signed-out installs never show ads.
 
 ### Phase 3 — Backend API and anti-fraud engine
 
@@ -74,12 +77,20 @@ private beta · P2 = post-launch / polish
 ### Phase 4 — Web app
 
 - [x] Landing page.
+- [x] `/sign-up` and `/sign-in` with inline errors, token persistence, shell
+      sign-out, and redirect to the dashboard.
 - [x] Dashboard with balance, threshold progress, and transparency log.
 - [x] Task center with screenshot upload and history.
 - [x] Referral page with link copy and stats.
 - [x] Payouts page with method, destination, and threshold gating.
 - [x] Advertiser portal with campaign creation, geo chips, moderation feedback,
       analytics, A/B variants, and geo table.
+- [x] Advertiser register/login (`POST /advertiser/register`, `POST
+      /advertiser/login`) with Argon2 and a `kind: "advertiser"` token, plus a
+      portal sign-in/up gate that stores the advertiser token separately from
+      the viewer token.
+- [x] `/r/:code` referral landing that forwards the code to `/sign-up?ref=`
+      and attributes it at registration.
 - [x] Shared UI primitives and design tokens.
 
 ### Build, tooling, and docs
@@ -180,50 +191,58 @@ private beta · P2 = post-launch / polish
 
 ## 2. P0 — Make the system testable end-to-end
 
-### T-01 · Web authentication screens
+### T-01 · Web authentication screens · done
 
-- [ ] `/sign-in` and `/sign-up` routes.
-- [ ] Call `POST /auth/login` / `POST /auth/register`.
-- [ ] Persist `accessToken` in `localStorage["mt_token"]`.
-- [ ] Redirect to `/dashboard` after auth.
-- [ ] Show signed-in state in the shell; add sign-out.
-- [ ] Surface API errors inline (invalid credentials, email taken).
-- [ ] Capture `?ref=` / `/r/:code` into signup.
+- [x] `/sign-in` and `/sign-up` routes.
+- [x] Call `POST /auth/login` / `POST /auth/register`.
+- [x] Persist `accessToken` in `localStorage["mt_token"]`.
+- [x] Redirect to `/dashboard` after auth.
+- [x] Show signed-in state in the shell; add sign-out.
+- [x] Surface API errors inline (invalid credentials, email taken).
+- [ ] Capture `?ref=` / `/r/:code` into signup (T-04).
 
-**Acceptance:** a new user can register in the web app, land on the dashboard,
-and see a $1.00 pending balance without touching devtools.
+**Acceptance:** met — verified 7/7 in Chromium: sign-up lands on the dashboard
+with the $1.00 pending balance, sign-out clears the token, and sign-in restores
+the session.
 
-### T-02 · Extension onboarding and identity bootstrap
+### T-02 · Extension onboarding and identity bootstrap · done
 
-- [ ] Popup signed-out state with email/password (or "Open web sign-in").
-- [ ] Generate/persist a device id and fingerprint hash.
-- [ ] Call `/auth/register` or `/auth/login` with `deviceId` +
+- [x] Popup signed-out state with email/password.
+- [x] Generate/persist a random install id; derive a fingerprint hash without
+      canvas/hardware fingerprinting.
+- [x] Call `/auth/register` or `/auth/login` with `deviceId` +
       `fingerprintHash`.
-- [ ] Store `identity` (`userId`, `deviceId`, `accessToken`, `refreshToken`,
-      `tokenExpiresAt`) in `chrome.storage.local`.
-- [ ] Configure the API base URL (`api_config`) for local development.
-- [ ] Trigger an initial prefetch after sign-in.
+- [x] Store `identity` (`userId`, `deviceId`, `accessToken`, `refreshToken`,
+      `tokenExpiresAt`, `email`) in `chrome.storage.local`.
+- [x] Configure the API base URL (`api_config`) from the popup, defaulting to
+      `http://localhost:3001` for local setup.
+- [x] Trigger prefetch immediately after sign-in and rotate refresh tokens on
+      401.
 
-**Acceptance:** a fresh extension install can sign in and receive ads without
-manually editing `chrome.storage.local`.
+**Acceptance:** met — verified 19/19 in Chromium: a fresh profile signs up in
+the popup, stores identity, prefetches 25 ads, earns on a prompt, survives a
+popup reload, and sign-out clears the session and cache.
 
-### T-03 · Advertiser authentication
+### T-03 · Advertiser authentication · done
 
-- [ ] `POST /advertiser/register` and `POST /advertiser/login`.
-- [ ] Argon2 verification and `kind: "advertiser"` token.
-- [ ] Web advertiser sign-in/up form.
-- [ ] Persist advertiser token separately from the user token.
-- [ ] Gate `/advertiser` behind advertiser auth.
+- [x] `POST /advertiser/register` and `POST /advertiser/login`.
+- [x] Argon2 verification and `kind: "advertiser"` token.
+- [x] Web advertiser sign-in/up form.
+- [x] Persist advertiser token separately from the user token
+      (`localStorage["mt_advertiser_token"]`).
+- [x] Gate `/advertiser` behind advertiser auth; a rejected token returns to
+      the form.
 
 **Acceptance:** the seeded advertiser (`demo@advertiser.test` /
 `demo-advertiser-pass-123`) can sign in and list campaigns.
 
-### T-04 · Referral landing and attribution
+### T-04 · Referral landing and attribution · done
 
-- [ ] `/r/:code` route and redirect to sign-up with code prefilled.
-- [ ] Store the code in `sessionStorage`/state until registration.
-- [ ] Pass `referralCode` to `/auth/register`.
-- [ ] Show a clear "bonus vests after $1.00 verified earnings" explanation.
+- [x] `/r/:code` route that redirects to `/sign-up?ref=<code>`.
+- [x] Sign-up reads the code from the URL search params (bounded to 32 chars).
+- [x] Pass `referralCode` to `/auth/register`; self-referral checks unchanged.
+- [x] Show a clear "bonus vests after $1.00 verified earnings" explanation on
+      the sign-up form when a code is present.
 
 **Acceptance:** two distinct users can complete referral attribution, and the
 referrer sees a pending referral in `/me/referrals`.
@@ -398,10 +417,12 @@ raw IPs.
 
 | # | Issue | Impact | Suggested fix |
 |---|---|---|---|
-| B-01 | Web has no auth screens; dashboard always calls `/me/*` without a token. | Cannot demo earnings without devtools. | T-01. |
-| B-02 | Extension never writes `identity`. | Cannot prefetch or report telemetry after install. | T-02. |
-| B-03 | No advertiser auth route, yet seeded advertiser exists. | Portal cannot be used. | T-03. |
-| B-04 | Referral link `/r/:code` 404s. | Referral loop is broken. | T-04. |
+| B-01 | ~~Web has no auth screens.~~ Fixed: `/sign-up` / `/sign-in`, token persistence, shell sign-out. | — | — |
+| B-02 | ~~Extension never writes `identity`.~~ Fixed: first-run popup onboarding, automatic prefetch, refresh rotation, sign-out cleanup. | — | — |
+| B-03 | ~~No advertiser auth route.~~ Fixed: advertiser register/login with a
+separate token kind, plus a portal sign-in gate. | — | — |
+| B-04 | ~~Referral link `/r/:code` 404s.~~ Fixed: the route forwards to
+`/sign-up?ref=` and registration attributes the code. | — | — |
 | B-05 | ~~`POST /ads/click` parses the lease without verifying the HMAC.~~ Fixed: verifies the lease, requires a verified impression owned by the caller, and dedupes per impression. | — | — |
 | B-06 | ~~`persist()` extracts the lease id by re-parsing the token.~~ Fixed: the verified `lease.lid` is passed through. | — | — |
 | B-07 | `users.signupIp` stores a raw IP. | Privacy violation. | T-07. |
@@ -429,8 +450,9 @@ A demo is considered working when:
 - [ ] A user can register/sign in (web + extension), receive an ad, and earn a
       verified impression.
 - [ ] The dashboard shows the impression and the balance increases.
-- [ ] An advertiser can sign in, create an approved campaign, and see analytics.
-- [ ] A referral can be attributed and shows `pending`.
+- [x] An advertiser can sign in, create a campaign, and see analytics.
+- [x] A referral link lands on sign-up with the code and is attributed at
+      registration (subject to the self-referral network check).
 - [ ] A payout request is gated by $5.00 and returns a trust verdict.
 - [ ] No raw IP or prompt text is stored.
 - [ ] `pnpm typecheck` and `pnpm build` pass.

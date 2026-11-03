@@ -103,6 +103,18 @@ export const refreshTokenSchema = z.object({
   refreshToken: z.string().min(16).max(256),
 });
 
+export const advertiserRegisterSchema = z.object({
+  email: z.string().email().max(254),
+  password: z.string().min(10).max(128),
+  companyName: z.string().min(1).max(80),
+  website: httpUrlSchema.optional(),
+});
+
+export const advertiserLoginSchema = z.object({
+  email: z.string().email().max(254),
+  password: z.string().min(1).max(128),
+});
+
 export const taskSubmissionSchema = z.object({
   taskType: z.enum(["x", "linkedin", "reddit", "chrome_web_store", "other"]),
   postUrl: taskUrlSchema,

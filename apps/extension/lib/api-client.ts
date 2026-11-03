@@ -1,12 +1,14 @@
 import type { Identity } from "./storage";
 import { STORAGE_KEYS } from "./storage";
 
+// WXT exposes `WXT_`-prefixed build env vars. Keep the cast local so the
+// generated ImportMetaEnv type does not need a project-specific declaration.
+const buildEnv = import.meta.env as unknown as Record<string, string | undefined>;
+
 export const DEFAULT_API_BASE =
-  (import.meta.env.WXT_API_BASE as string | undefined)?.replace(/\/+$/, "") ??
-  "http://localhost:3001";
+  buildEnv.WXT_API_BASE?.replace(/\/+$/, "") ?? "http://localhost:3001";
 export const WEB_BASE =
-  (import.meta.env.WXT_WEB_BASE as string | undefined)?.replace(/\/+$/, "") ??
-  "http://localhost:3000";
+  buildEnv.WXT_WEB_BASE?.replace(/\/+$/, "") ?? "http://localhost:3000";
 const CONFIG_KEY = "api_config";
 
 interface ApiConfig {

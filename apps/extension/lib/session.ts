@@ -1,8 +1,15 @@
-import { sha256Hex } from "@meantime/shared";
 import { getApiBase } from "./api-client";
 import { STORAGE_KEYS, storageGet, storageSet, uuidv4, type Identity } from "./storage";
 
 const INSTALL_ID_KEY = "install_id";
+
+/** Local SHA-256 so the popup does not pull the whole shared package. */
+async function sha256Hex(input: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
 
 export type AuthMode = "login" | "register";
 
@@ -103,5 +110,12 @@ export async function signOut(): Promise<void> {
       // Offline logout still clears local state.
     }
   }
-  await chrome.storage.local.remove(STORAGE_KEYS.IDENTITY);
+  // Drop per-account ad state too: a signed-out install or a different account
+  // must not inherit the previous user's cached ads or frequency history.
+  await chrome.storage.local.remove([
+    STORAGE_KEYS.IDENTITY,
+    STORAGE_KEYS.AD_CACHE,
+    STORAGE_KEYS.IMPRESSION_HISTORY,
+    STORAGE_KEYS.PROMPT_COUNTER,
+  ]);
 }

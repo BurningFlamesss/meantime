@@ -170,6 +170,8 @@ async function init(): Promise<void> {
   signOutButton.addEventListener("click", async () => {
     signOutButton.disabled = true;
     try {
+      // Settle already-watched impressions while the session is still valid.
+      await chrome.runtime.sendMessage({ type: "flush_now" }).catch(() => undefined);
       await signOut();
       await renderSession();
     } finally {
