@@ -63,6 +63,12 @@ services:
       # time out into needs_review. Multilingual loads lazily when detected.
       LAYA_PRELOAD: "1"
       LAYA_MODELS: "english"
+      # Short task states (a URL plus a task type) carry too little language
+      # evidence, and Laya's default is `multilingual`. That checkpoint is not
+      # preloaded, so the first task would trigger a multi-hundred-MB lazy
+      # download and blow the API's 4s classifier budget. This is a
+      # mostly-English deployment, so undecided states use the loaded model.
+      LAYA_DEFAULT_MODEL: "english"
       OMP_NUM_THREADS: "4"
     ports:
       # Loopback only: `laya-serve` has no API key unless LAYA_API_KEY is set.

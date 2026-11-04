@@ -15,7 +15,8 @@
     "db:migrate": "pnpm --filter @meantime/api db:migrate",
     "db:seed": "pnpm --filter @meantime/api db:seed",
     "db:check": "pnpm --filter @meantime/api db:check",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "laya:check": "node scripts/laya-check.mjs"
   },
   "devDependencies": {
     "prettier": "^3.4.2",

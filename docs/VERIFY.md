@@ -83,11 +83,31 @@ curl -s http://127.0.0.1:8000/health
 
 Expected: `{"status":"ok","loaded":["english"],...}`. The first request after a
 cold start can take a few seconds; the API's classifier timeout is 4s, so a
-cold model fails closed to `needs_review` rather than approving anything.
+cold model fails closed to `needs_review` rather than approving anything. Warm
+ad and task inferences are ~0.2–0.6 s.
+
+Both compose and `infra/laya-host.sh` set `LAYA_DEFAULT_MODEL=english`. Short
+task states (a URL plus a task type) have too little language evidence for
+Laya's detector, whose default is `multilingual`; that checkpoint is not
+preloaded here, so the first task would otherwise trigger a lazy download and
+miss the 4 s budget. Add `multilingual` to `LAYA_MODELS` and point
+`LAYA_DEFAULT_MODEL` at it if you need non-English content.
+
+Protocol and failure-mode suite (policy-first, clamping, fail-closed, the exact
+request shape, plus real-model probes when `LAYA_ENDPOINT` is set):
+
+```bash
+pnpm build
+LAYA_ENDPOINT=http://127.0.0.1:8000 pnpm laya:check
+```
+
+Expected with the real server: `38 passed, 0 failed, 0 skipped`; a fake
+classifier covers the failure modes, and the real probes must stay under 4 s.
 
 Offline loop: `docker compose --profile stub up -d` (or
 `node infra/laya-stub/server.mjs`) and set `LAYA_ENDPOINT=http://localhost:8080`.
-The stub answers the same protocol but is **not** a model.
+The stub answers the same protocol but is **not** a model; `pnpm laya:check`
+without `LAYA_ENDPOINT` still runs the protocol/failure-mode half.
 
 ## 5. API
 
@@ -99,13 +119,16 @@ curl -s http://localhost:3001/health   # {"ok":true,"service":"meantime-api"}
 Full surface check:
 
 ```bash
-ADMIN_API_KEY=... pnpm smoke
+pnpm smoke   # loads apps/api/.env, including ADMIN_API_KEY
 ```
 
-`scripts/smoke.mjs` covers advertiser register/login/refresh/logout, token
-scoping, campaign creation through moderation, a verified 5-second view paying
-55%, and referral attribution plus vesting. It exits non-zero on the first
-failing group and prints a pass count.
+`scripts/smoke.mjs` runs 30 checks: advertiser register/login/refresh/logout,
+token scoping, campaign creation through moderation, a verified 5-second view
+paying 55%, and referral attribution plus vesting. It also exercises the
+reviewer surface — operator-key rejection, the queue buckets, the
+advertiser self-activation guard, and campaign/task/payout decisions, including
+the task reward credit and the payout debit. It exits non-zero on failure and
+prints a pass count.
 
 Referral attribution requires two distinct client IPs, because a signup that
 shares the referrer's IP is refused as a self-referral. On one machine the

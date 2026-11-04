@@ -1,6 +1,6 @@
 # MeanTime — Tasks and Roadmap
 
-**Last updated:** 2026-11-04 (privacy, setup, and early-close pass)  
+**Last updated:** 2026-11-04 (real Laya + reviewer verification pass)  
 **Status legend:** `[x]` done · `[~]` partial · `[ ]` not started · `[!]` blocked  
 **Priority:** P0 = required for a testable end-to-end demo · P1 = required for
 private beta · P2 = post-launch / polish
@@ -14,13 +14,13 @@ private beta · P2 = post-launch / polish
 | Shared contracts, schema, crypto, selectors | `[x]` | `pnpm typecheck` + `pnpm build` pass. |
 | Fastify API and fraud engine | `[x]` verified | Against PostgreSQL 18: register/login, prefetch, telemetry (verified, replay, forged lease, low PoHI, below threshold), balance, impressions, referrals, tasks presign, payouts threshold, advertiser create/list/variants/stats/analytics/click. |
 | TanStack Start web app | `[x]` verified | Production SSR bundle serves all routes with 200. `/sign-up`, `/sign-in`, dashboard, sign-out, and sign-in-again passed 7/7 in Chromium. Advertiser sign-up/sign-in with rotating sessions, and `/r/:code` attribution. |
-| API smoke suite | `[x]` exists | `pnpm smoke` covers advertiser sessions, moderation, the 55% payment, and referral attribution + vesting. |
-| WXT extension | `[x]` verified | `.output/chrome-mv3` builds (185.5 KB; 94 KB content, 74 KB worker, 9 KB popup) and was loaded in real Chromium: first-run popup sign-up, prefetch, ad injection, 5 s payment, reload persistence, and sign-out all passed 19/19. |
-| Database migrations | `[x]` applied | `apps/api/drizzle/0000`–`0005`, 18 tables, applied to PostgreSQL 18. |
-| Demo seed | `[x]` run | 1 advertiser + 2 active campaigns inserted. |
-| Docker compose | `[x]` verified | Postgres 16, Redis 7, s3mock and the Laya stub run healthy in compose; migrations + seed apply to it and `pnpm smoke` passes 19/19. The real Laya image build is still unverified. |
-| Laya moderation | `[x]` real model | The pinned upstream `v0.4.21` `laya-serve` was run from source with CPU torch and the English checkpoint on `:8000`. Clean copy → 92/`auto_approved`, crypto/prize scams → 0–36/`auto_rejected`, clean task link → `needs_review`. The Docker image itself is still unbuilt. |
-| Automated tests | `[ ]` | No test suite exists. |
+| API smoke suite | `[x]` verified | `pnpm smoke` passes 30/30 against the real `laya-serve`: advertiser sessions, moderation, the 55% payment, referral attribution + vesting, plus the reviewer queue and campaign/task/payout decisions. It loads `apps/api/.env` for `ADMIN_API_KEY`. |
+| WXT extension | `[x]` verified | `.output/chrome-mv3` builds (189.2 KB; 94.5 KB content, 74.4 KB worker, 9.5 KB popup) and was loaded in real Chromium: first-run popup sign-up, prefetch, ad injection, 5 s payment, reload persistence, and sign-out all passed 19/19. |
+| Database migrations | `[x]` applied | `apps/api/drizzle/0000`–`0005`, 18 tables, applied to PostgreSQL 16 (compose) and 18. |
+| Demo seed | `[x]` run | 1 advertiser + 2 active campaigns inserted; re-runs are idempotent. |
+| Docker compose | `[x]` verified | The real pinned `v0.4.21` Laya image builds and runs healthy beside Postgres 16, Redis 7, and s3mock; migrations + seed apply and `pnpm smoke` passes 30/30. `LAYA_DEFAULT_MODEL=english` keeps short task states on the preloaded checkpoint. |
+| Laya moderation | `[x]` real model | Real `laya-serve` container on `:8000` with the English checkpoint. `pnpm laya:check` passes 38/38, including real probes: clean ad 82/`needs_review`, crypto scam 10/`auto_rejected`, benign task 93/`needs_review`, phishing task 7/`auto_rejected`; every inference <650 ms. |
+| Automated tests | `[~]` harnesses | No unit suite. `pnpm smoke` (30/30) and `pnpm laya:check` (38/38) run against the real API, database, and classifier. |
 | Auth/onboarding UX | `[x]` | Web sign-up/sign-in/sign-out and first-run popup onboarding work without manual storage edits. |
 
 ---
@@ -97,7 +97,8 @@ private beta · P2 = post-launch / polish
       (single-use rotation) and `POST /advertiser/logout` (revocation). The
       portal rotates on 401 and revokes on sign-out.
 - [x] `scripts/smoke.mjs` (`pnpm smoke`): advertiser auth, token scoping,
-      moderation, 55% payment, referral attribution and vesting.
+      moderation, 55% payment, referral attribution and vesting, plus the
+      reviewer queue and campaign/task/payout decisions.
 - [x] `docs/VERIFY.md`: how to verify every service plus the money and privacy
       invariants.
 - [x] Shared UI primitives and design tokens.
@@ -146,11 +147,16 @@ private beta · P2 = post-launch / polish
       adjustment; crypto/prize scams → `auto_rejected`; suspicious TLD →
       `needs_review` with a `suspicious_tld` reason; blocked term →
       `auto_rejected` without network.
-- [x] Ran the real Laya `v0.4.21` server from upstream source (Python 3.13
-      venv, `torch==2.15.0+cpu`, `[serve]` extra) and downloaded the English
-      checkpoint (`convaiinnovations/laya`, revision `7b928d8`, ~808 MB).
-- [x] Verified `/health` reports `loaded: ["english"]` on CPU and inference
-      answers in ~1.1 s after preload.
+- [x] Ran the real Laya `v0.4.21` server both from upstream source (Python
+      3.13 venv, `torch==2.15.0+cpu`, `[serve]` extra) and from the pinned
+      Docker image, with the English checkpoint (`convaiinnovations/laya`,
+      revision `7b928d8`, ~808 MB).
+- [x] Added `LAYA_DEFAULT_MODEL=english` to compose and `infra/laya-host.sh`:
+      short task states carry little language evidence, and Laya's
+      `multilingual` default is not preloaded, so the first task would trigger
+      a lazy checkpoint download and exceed the 4 s classifier budget.
+- [x] Verified `/health` reports `loaded: ["english"]` on CPU and that ad and
+      task inference both answer in well under the 4 s budget (<650 ms warm).
 - [x] Replaced the per-offence `noul` questions with one `choice` over
       legitimate/low-quality/deceptive/fraud: against the real checkpoint the
       old questions scored **every** ad as spam (~1.0), so all campaigns were
@@ -210,7 +216,9 @@ private beta · P2 = post-launch / polish
       the 5 s rule, the 55% share, prompt privacy, and why each permission is
       needed) plus an explicit "Ads paused" banner with a one-click resume that
       reflects both the enable toggle and a snooze started in the page widget.
-- [ ] Docker compose actually executed (blocked: no Docker binary/root).
+- [x] Docker compose actually executed: Postgres 16, Redis 7, s3mock, and the
+      real `laya-serve` run healthy; migrations, seed, and `pnpm smoke` (30/30)
+      pass against the compose stack.
 
 ---
 
@@ -279,12 +287,14 @@ referrer sees a pending referral in `/me/referrals`.
       `laya-serve` service with healthchecks.
 - [x] Laya integration uses upstream's `POST /v1/systemone` contract.
 - [x] Offline test double under `--profile stub` speaks the same contract.
-- [x] `docker compose up -d` starts Postgres, Redis, s3mock, and laya-stub
-      healthy (verified on a Docker-capable host).
+- [x] `docker compose up -d` starts Postgres, Redis, s3mock, and the real
+      `laya-serve` healthy (verified on a Docker-capable host).
 - [x] `pnpm db:migrate` and `pnpm db:seed` succeed against the compose
-      PostgreSQL 16 instance, and `pnpm smoke` passes 19/19 against it.
-- [!] The Laya container image itself (10 GB PyTorch CPU) is still unbuilt; the
-      same upstream tag was run from source, and the stub covers compose.
+      PostgreSQL 16 instance, and `pnpm smoke` passes 30/30 against it.
+- [x] The pinned `v0.4.21` Laya container image builds (PyTorch CPU) and serves
+      the English checkpoint; `LAYA_DEFAULT_MODEL=english` avoids a lazy
+      multilingual download when a short task state carries little language
+      evidence.
 - [x] `docs/VERIFY.md` describes how to verify each service.
 - [x] Object upload path verified end to end against s3mock: presigned PUT,
       HeadObject validation, and task submit.
@@ -301,6 +311,10 @@ up infra and seed data without manual edits.
       lease, submits a real telemetry batch, and asserts the 55% payment.
 - [x] Covers advertiser register/login/refresh/logout, token scoping, campaign
       creation through moderation, referral attribution and vesting.
+- [x] Covers the reviewer surface: operator-key rejection, the queue buckets,
+      the advertiser self-activation guard, and campaign/task/payout decisions
+      (including the reward credit and payout debit). `ADMIN_API_KEY` is read
+      from `apps/api/.env` when present, so a plain `pnpm smoke` exercises it.
 - [ ] Playwright coverage for the web flow; the extension stays manual.
 
 **Acceptance:** met for the API surface. `pnpm smoke` reports pass/fail per
@@ -454,15 +468,15 @@ separate token kind, plus a portal sign-in gate. | — | — |
 | B-05 | ~~`POST /ads/click` parses the lease without verifying the HMAC.~~ Fixed: verifies the lease, requires a verified impression owned by the caller, and dedupes per impression. | — | — |
 | B-06 | ~~`persist()` extracts the lease id by re-parsing the token.~~ Fixed: the verified `lease.lid` is passed through. | — | — |
 | B-07 | ~~`users.signupIp` stores a raw IP.~~ Fixed: only a salted hash is stored (`signup_ip_hash`). | — | — |
-| B-08 | ~~Advertiser could activate a `needs_review` draft.~~ Fixed: `/activate` now returns `409 moderation_required` unless moderation was `auto_approved`. | No reviewer UI yet, so review-blocked campaigns stay off. | Build the reviewer queue. |
+| B-08 | ~~Advertiser could activate a `needs_review` draft.~~ Fixed: `/activate` now returns `409 moderation_required` unless moderation was `auto_approved`. | — | Covered by `pnpm smoke`; reviewer queue and `/admin` UI exist. |
 | B-09 | No tests. | Regressions likely. | P1 testing. |
 | B-10 | ~~`referralCodeFor` is duplicated.~~ Fixed: one implementation in `referrals.ts`. | — | — |
 | B-11 | ~~Referrer lookup used `pgcrypto.digest`.~~ Fixed: uses core `sha256(convert_to(...))`. | — | — |
 | B-12 | `@meantime/shared` exports build output, so a fresh production start requires a build. | Confusing failure if run directly. | Documented; keep Turbo ordering. |
-| B-13 | No Docker available in the authoring environment. | Compose unverified. | Run T-05 on a Docker-capable machine. |
+| B-13 | ~~No Docker available in the authoring environment.~~ Resolved: compose ran on a Docker-capable host (Postgres, Redis, s3mock, real Laya) and the smoke suite passed. | — | — |
 | B-14 | Referral attribution rejects same-IP signups (`ip_overlap_with_referrer`). | A referral cannot be exercised from a single client IP — by design. | Testable without weakening it: `pnpm smoke` binds a distinct loopback source address (`localAddress`), because the kernel otherwise always picks 127.0.0.1 as the source. |
 | B-15 | Laya is text-only; task screenshots are never analysed. | Task proofs always need a human (`screenshot_unverified`). | Add an image-capable classifier or a reviewer UI. |
-| B-16 | Real Laya was run from source, but the container image is still unbuilt (no Docker). | Compose and the `laya-models` volume are unverified. | Run T-05 on a Docker-capable machine. |
+| B-16 | ~~Real Laya was run from source, but the container image is still unbuilt.~~ Resolved: the pinned image builds and serves the English checkpoint; the compose volume is seeded from the cached checkpoint. | — | — |
 | B-17 | The real checkpoint is poorly calibrated for yes/no moderation questions; the original `noul` set scored every ad as spam. Fixed with a `choice` category question (see §1). | Clean copy can still land in `needs_review` (e.g. copy that mentions earning money, or an advertiser with prior rejections). | Build the evaluation harness in P2 before tuning the 85/40 bands. |
 
 ---

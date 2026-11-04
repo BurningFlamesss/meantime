@@ -178,7 +178,7 @@ API (`apps/api/.env`, loaded automatically by `loadEnv()` when present):
 | `PORT` | no | `3001` | API port. |
 | `WEB_ORIGIN` | no | `http://localhost:3000` | CORS origin and referral link base. |
 | `IP_HASH_SALT` | no | dev placeholder | Salt for IP equality hashes. **Change in production.** |
-| `LAYA_ENDPOINT` | no | `http://localhost:8080` | Moderation classifier base URL. |
+| `LAYA_ENDPOINT` | no | `http://localhost:8000` | Moderation classifier base URL. |
 | `LAYA_ENABLED` | no | `true` | Disable to force `needs_review`. |
 | `LOG_LEVEL` | no | `info` | Fastify log level. |
 
@@ -358,6 +358,13 @@ Laya is a text classifier, so the task path sends the claimed post URL rather
 than the screenshot. It can reject an obvious phishing/scam link, but a clean
 link still stops at `needs_review` with `screenshot_unverified`; there is no
 automatic approval of task proofs.
+
+The self-hosted server preloads `english` and sets `LAYA_DEFAULT_MODEL=english`.
+Laya's detector cannot identify a language from a short task state (a URL plus
+a task type) and would otherwise choose `multilingual`, which is not preloaded
+in this mostly-English deployment; the resulting lazy checkpoint download would
+exceed the client's 4 s timeout. Deployments with non-English content should
+preload `multilingual` and change the default together.
 
 ### 5.6 Geo and privacy flow
 
@@ -747,17 +754,14 @@ These are tracked as tasks in [TASKS.md](./TASKS.md).
 
 ---
 
-## 15. Verification status (2026-11-03)
+## 15. Verification status (2026-11-04)
 
-Docker was unavailable in the authoring environment, so compose itself was not
-executed. The database-dependent path was exercised against an embedded
-PostgreSQL 18 instance on `127.0.0.1:55432`, with the API built via `tsc` and
-run with `node dist/index.js`. The real Laya model was run **without Docker**:
-the pinned upstream `v0.4.21` source was installed into a Python 3.13 virtualenv
-with `torch==2.15.0+cpu` and the `[serve]` extra, and `laya-serve` loaded the
-English checkpoint (`convaiinnovations/laya`, revision `7b928d8`, ~808 MB in
-the HF cache) on `127.0.0.1:8000`. The offline `/v1/systemone` test double on
-`:8080` also speaks the same shape.
+The full stack was run on a Docker-capable host: compose brought up PostgreSQL
+16, Redis 7, s3mock, and the pinned upstream `v0.4.21` Laya image, which loaded
+the English checkpoint (`convaiinnovations/laya`, revision `7b928d8`, ~808 MB).
+The API and web server ran from the host via pnpm. `LAYA_DEFAULT_MODEL=english`
+keeps short task states on the preloaded checkpoint instead of lazily fetching
+`multilingual`; without it the first task submission exceeded the 4 s budget.
 
 Verified:
 
@@ -768,9 +772,9 @@ Verified:
   and cached ads (19/19 checks).
 - Web auth: `/sign-up` → dashboard with the $1.00 pending balance, sign-out
   clears the token, and sign-in restores the session (7/7 checks).
-- Device footprint: the complete MV3 bundle is 185.5 KB (94 KB content script,
-  74 KB service worker, 9 KB popup); no model or LLM runtime ships to the
-  browser. Laya runs only on the API host.
+- Device footprint: the complete MV3 bundle is 189.2 KB (94.5 KB content
+  script, 74.4 KB service worker, 9.5 KB popup); no model or LLM runtime ships
+  to the browser. Laya runs only on the API host.
 - Auth: registration/login issue rotating refresh sessions; reuse of a rotated
   token is rejected; logout revokes it; the register and login limits return
   `429` at their bounds.
@@ -786,8 +790,9 @@ Verified:
   approval paid exactly once.
 - The reviewer UI loaded at both `localhost` and `127.0.0.1` origins and
   rendered live queue rows after the loopback CORS fix.
-- `pnpm db:migrate` applies all 18 tables (migrations `0000`–`0003`);
-  `pnpm db:seed` inserts the demo advertiser and two active campaigns.
+- `pnpm db:migrate` applies all 18 tables (migrations `0000`–`0005`);
+  `pnpm db:seed` inserts the demo advertiser and two active campaigns, and
+  re-runs print `Seed already applied.`
 - `POST /auth/register` and `/auth/login` return tokens; `/me/balance` starts at
   the $1.00 pending welcome bonus.
 - `POST /ads/prefetch` issues signed leases with pacing info.
@@ -806,22 +811,24 @@ Verified:
 - Advertiser auth: register/login issue a 1-hour access token plus a rotating
   refresh session; a spent refresh token and a revoked one both return `401`;
   the portal rotates on `401` and revokes on sign-out.
-- `pnpm smoke` (19/19 against the live API): advertiser sessions and token
-  scoping, a clean campaign `auto_approved` by the real checkpoint, a verified
+- `pnpm smoke` (30/30 against the live API and real checkpoint): advertiser
+  sessions and token scoping, a clean campaign through moderation, a verified
   5 s view paying 55%, referral attribution across two client networks, the
-  $1.00 vesting threshold, and the $0.50 referrer bonus.
-- `docker compose up -d` brings Postgres, Redis, s3mock and the Laya stub up
-  healthy; `pnpm db:migrate` and `pnpm db:seed` apply to the compose database,
-  and `pnpm smoke` passes 19/19 against it. A presigned `PUT` into s3mock is
-  accepted, `HeadObject` validates it, and `/tasks/submit` records the proof.
-- Moderation against the **real English checkpoint**: `GET /health` reports
-  `loaded: ["english"]` on CPU; clean ad copy scores 92 and is `auto_approved`;
-  crypto/prize/lottery scams score 0–36 and are `auto_rejected`; ambiguous
-  copy lands in `needs_review`; a blocked term is `auto_rejected` before any
-  network call. A clean task link stays in `needs_review` with
-  `screenshot_unverified`, while phishing/prize links are rejected. The
-  classifier answers in ~0.3 s for the single category question on CPU (four
-  questions took ~1.0 s), and a timeout still routes to `needs_review`.
+  $1.00 vesting threshold, the $0.50 referrer bonus, and the reviewer surface:
+  operator-key rejection, queue buckets, the advertiser self-activation guard,
+  and campaign/task/payout decisions with their reward credit and payout debit.
+- `docker compose up -d` brings Postgres 16, Redis 7, s3mock, and the real
+  Laya image up healthy; `pnpm db:migrate` and `pnpm db:seed` apply to the
+  compose database, and `pnpm smoke` passes 30/30 against it. A presigned `PUT`
+  into s3mock is accepted, `HeadObject` validates it, and `/tasks/submit`
+  records the proof.
+- Moderation against the **real English checkpoint** (`pnpm laya:check` 38/38,
+  including real-model probes): `GET /health` reports `loaded: ["english"]` on
+  CPU; clean ad copy scores 82 and lands in `needs_review`; a crypto scam scores
+  10 and is `auto_rejected`; a benign task link scores 93 and stays in
+  `needs_review` with `screenshot_unverified`; a phishing link scores 7 and is
+  `auto_rejected`. Every ad and task inference stays under 650 ms, well inside
+  the 4 s budget, and a timeout still routes to `needs_review`.
 - Task moderation rejects a suspicious link and leaves a clean link in
   `needs_review` with `screenshot_unverified`.
 - The end-to-end earn loop on the rebuilt API: prefetch → 5.2 s verified
@@ -835,9 +842,6 @@ Verified:
 
 Not verified:
 
-- The real Laya **container image** build (10 GB PyTorch CPU base). Compose is
-  otherwise verified; the classifier was validated against the same upstream
-  tag run from source, and the stub covers the compose path.
 - Formal Laya accuracy/precision on a labelled benchmark. Prompt calibration
   used a small hand-written sample of clean ads and obvious fraud.
 - A payout above the $5 threshold to a real processor (no funded account or
@@ -845,6 +849,8 @@ Not verified:
   loopback source-binding test stands in for that).
 - Task-proof image *contents* are still reviewed by a human, because Laya is
   text-only.
+- The multilingual checkpoint was not downloaded; the deployment is
+  English-only and routes undecided states to the preloaded English model.
 
 Two bugs found during this run were fixed: BigInt money columns now serialize
 as decimal strings (the web client already types them as strings), and the

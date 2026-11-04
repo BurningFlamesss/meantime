@@ -19,6 +19,21 @@
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+// Match the API's local setup: `apps/api/.env` carries ADMIN_API_KEY, so a
+// plain `pnpm smoke` exercises the reviewer surface instead of silently
+// skipping it. Real environment variables still win (loadEnvFile never
+// overwrites), which keeps CI/production overrides authoritative.
+const apiEnvFile = fileURLToPath(new URL("../apps/api/.env", import.meta.url));
+if (existsSync(apiEnvFile) && typeof process.loadEnvFile === "function") {
+  try {
+    process.loadEnvFile(apiEnvFile);
+  } catch {
+    // A malformed local .env should not stop the smoke run.
+  }
+}
 
 const API = (process.env.API_BASE ?? "http://127.0.0.1:3001").replace(/\/+$/, "");
 const ADMIN_KEY = process.env.ADMIN_API_KEY;
@@ -277,12 +292,216 @@ async function campaignChecks(advertiserToken, cpiMicro) {
   return campaign;
 }
 
+/* --------------------------- reviewer surface -------------------------- */
+async function uploadProof(token, bytes) {
+  const presigned = await call("/tasks/presign", token, { contentType: "image/png" });
+  if (presigned.status !== 200 || !presigned.json.uploadUrl) {
+    return { ok: false, detail: `presign ${presigned.status}` };
+  }
+  const put = await fetch(presigned.json.uploadUrl, {
+    method: "PUT",
+    headers: { "content-type": "image/png" },
+    body: bytes,
+  });
+  if (!put.ok) return { ok: false, detail: `upload ${put.status}` };
+  return { ok: true, key: presigned.json.key };
+}
+
+/**
+ * The operator surface is a real part of the app, so do not rely on a model
+ * score happening to land in review: exercise the queue, the fail-closed
+ * advertiser activation guard, and one decision per reviewable entity.
+ */
+async function adminChecks(advertiserToken, referredToken) {
+  if (!ADMIN_KEY) {
+    skip(
+      "reviewer surface",
+      "ADMIN_API_KEY is unset; set it on the API (and in apps/api/.env for local runs)",
+    );
+    return;
+  }
+  const headers = { "x-admin-key": ADMIN_KEY };
+
+  const anonymous = await call("/admin/queue");
+  const wrong = await call("/admin/queue", null, undefined, {
+    headers: { "x-admin-key": "not-the-operator-key" },
+  });
+  const queue = await call("/admin/queue", null, undefined, { headers });
+  check(
+    "reviewer queue rejects missing and wrong operator keys",
+    anonymous.status === 401 && wrong.status === 401,
+    `missing ${anonymous.status}, wrong ${wrong.status}`,
+  );
+  check(
+    "reviewer queue returns every review bucket",
+    queue.status === 200 &&
+      Array.isArray(queue.json.campaigns) &&
+      Array.isArray(queue.json.variants) &&
+      Array.isArray(queue.json.tasks) &&
+      Array.isArray(queue.json.payouts),
+    `status ${queue.status}`,
+  );
+
+  // Borderline-but-not-clearly-abusive copy. The pinned English checkpoint
+  // scores this below AUTO_APPROVE, so it must wait for a human.
+  const pending = await call("/advertiser/campaigns", advertiserToken, {
+    name: `Review queue probe ${Date.now()}`,
+    headline: "Special offer just for you",
+    bodyText: "Lose 10 pounds in 3 days with no diet or exercise - guaranteed.",
+    ctaText: "Learn more",
+    targetUrl: "https://fit-fast.xyz/offer",
+    dailyBudgetMicro: 50_000_000,
+    cpiMicro: 1_000_000,
+    targetPlatforms: ["openai"],
+    targetGeoClusters: [],
+  });
+  const probe = pending.json?.campaign;
+  if (probe?.status !== "draft" || probe?.moderationDecision !== "needs_review") {
+    skip(
+      "borderline creative waits in the review queue",
+      `classifier returned ${pending.json?.moderation?.decision ?? pending.status}`,
+    );
+  } else {
+    const selfActivate = await call(
+      `/advertiser/campaigns/${probe.id}/activate`,
+      advertiserToken,
+      {},
+    );
+    check(
+      "advertiser cannot self-approve a campaign pending review",
+      selfActivate.status === 409 && selfActivate.json.error === "moderation_required",
+      `status ${selfActivate.status}`,
+    );
+    const queued = await call("/admin/queue", null, undefined, { headers });
+    check(
+      "pending campaign appears in the reviewer queue",
+      queued.status === 200 && queued.json.campaigns.some((c) => c.id === probe.id),
+      `campaigns ${queued.json?.campaigns?.length ?? "?"}`,
+    );
+  }
+
+  if (probe?.id) {
+    const approved = await call(
+      `/admin/campaigns/${probe.id}/review`,
+      null,
+      { decision: "approve", notes: "smoke reviewer" },
+      { headers },
+    );
+    check(
+      "reviewer approval activates the campaign",
+      approved.status === 200 && approved.json.status === "active",
+      `status ${approved.status}`,
+    );
+    const after = await call("/admin/queue", null, undefined, { headers });
+    check(
+      "approved campaign leaves the reviewer queue",
+      after.status === 200 && !after.json.campaigns.some((c) => c.id === probe.id),
+      `campaigns ${after.json?.campaigns?.length ?? "?"}`,
+    );
+  }
+
+  if (!referredToken) {
+    skip("reviewer task + payout decisions", "no referred user session");
+    return;
+  }
+
+  // A text-only model cannot verify a screenshot, so a benign task link lands
+  // in review; approving it through the operator API must pay the reward.
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+  const proof = await uploadProof(referredToken, png);
+  if (!proof.ok) {
+    skip("reviewer task decision", `proof upload failed: ${proof.detail}`);
+  } else {
+    const submitted = await call("/tasks/submit", referredToken, {
+      taskType: "x",
+      postUrl: "https://github.com/octocat/Hello-World",
+      screenshotKey: proof.key,
+    });
+    const taskId = submitted.json?.taskId;
+    if (submitted.status !== 200 || submitted.json?.status !== "pending") {
+      skip("reviewer task decision", `task status ${submitted.json?.status ?? submitted.status}`);
+    } else {
+      const taskQueue = await call("/admin/queue", null, undefined, { headers });
+      check(
+        "pending task appears in the reviewer queue",
+        taskQueue.status === 200 && taskQueue.json.tasks.some((t) => t.id === taskId),
+        `tasks ${taskQueue.json?.tasks?.length ?? "?"}`,
+      );
+      const before = await call("/me/balance", referredToken);
+      const decided = await call(
+        `/admin/tasks/${taskId}/review`,
+        null,
+        { decision: "approve", notes: "smoke reviewer" },
+        { headers },
+      );
+      const after = await call("/me/balance", referredToken);
+      const delta = Number(after.json.availableMicro) - Number(before.json.availableMicro);
+      check(
+        "reviewer task approval pays the task reward",
+        decided.status === 200 && decided.json.status === "approved" && delta === 100_000,
+        `status ${decided.status}, delta ${delta}`,
+      );
+    }
+  }
+
+  // The referred user earned 55% of a high bid, clearing the $5.00 threshold.
+  // A brand-new account cannot reach TRUST.AUTO_APPROVE, so the request lands
+  // in auditing/frozen for an operator decision.
+  const beforePayout = await call("/me/balance", referredToken);
+  const requested = await call("/payouts/request", referredToken, {
+    method: "paypal",
+    address: `smoke-${randomUUID()}@example.invalid`,
+    amountMicro: 5_000_000,
+  });
+  const payoutId = requested.json?.payoutId;
+  const reviewable =
+    requested.json?.status === "auditing" || requested.json?.status === "frozen";
+  if (!reviewable) {
+    skip("reviewer payout decision", `payout status ${requested.json?.status ?? requested.status}`);
+    return;
+  }
+  const payoutQueue = await call("/admin/queue", null, undefined, { headers });
+  check(
+    "payout awaiting review appears in the reviewer queue",
+    payoutQueue.status === 200 && payoutQueue.json.payouts.some((p) => p.id === payoutId),
+    `payouts ${payoutQueue.json?.payouts?.length ?? "?"}`,
+  );
+  const approvedPayout = await call(
+    `/admin/payouts/${payoutId}/review`,
+    null,
+    { decision: "approve", notes: "smoke reviewer" },
+    { headers },
+  );
+  const afterPayout = await call("/me/balance", referredToken);
+  // Frozen requests debit on approval; auditing requests debit at request
+  // time. Either way the balance measured before the request drops by 5.00.
+  const payoutDelta =
+    Number(beforePayout.json.availableMicro) - Number(afterPayout.json.availableMicro);
+  check(
+    "reviewer payout approval resolves the request and debits the balance",
+    approvedPayout.status === 200 &&
+      approvedPayout.json.status === "approved" &&
+      payoutDelta === 5_000_000,
+    `status ${approvedPayout.status}, delta ${payoutDelta}`,
+  );
+  const again = await call(
+    `/admin/payouts/${payoutId}/review`,
+    null,
+    { decision: "approve" },
+    { headers },
+  );
+  check("a resolved payout cannot be reviewed twice", again.status === 409, `status ${again.status}`);
+}
+
 /* ------------------------------ referral ------------------------------- */
 async function referralChecks(cpiMicro) {
   const referrer = await registerUser("ref-a");
   if (limited(referrer)) {
     skip("referral checks", "register rate limit (8 per 10 min per IP); re-run later");
-    return;
+    return null;
   }
   const stats = await call("/me/referrals", referrer.json.accessToken);
   check(
@@ -325,7 +544,7 @@ async function referralChecks(cpiMicro) {
   });
   if (limited(referred)) {
     skip("referral attribution", "register rate limit; re-run later");
-    return;
+    return null;
   }
   const attributed = await call("/me/referrals", referrer.json.accessToken);
   check(
@@ -337,7 +556,7 @@ async function referralChecks(cpiMicro) {
     console.log(
       `      (attribution needs a distinct client IP; SMOKE_LOCAL_ADDRESS=${LOCAL_ADDRESS})`,
     );
-    return;
+    return null;
   }
 
   /* Earn $1.00+ as the referred user so the bonus vests. */
@@ -353,7 +572,7 @@ async function referralChecks(cpiMicro) {
     prefetched.status === 200 && !!ad?.leaseToken,
     `status ${prefetched.status}, ads ${prefetched.json?.ads?.length ?? 0}`,
   );
-  if (!ad) return;
+  if (!ad) return null;
 
   const batch = await alt("/telemetry/batch", referred.json.accessToken, {
     batchId: randomUUID(),
@@ -404,6 +623,7 @@ async function referralChecks(cpiMicro) {
     Number(balance.json.availableMicro) >= 500_000,
     `available ${balance.json.availableMicro}`,
   );
+  return referred.json.accessToken;
 }
 
 async function main() {
@@ -418,15 +638,19 @@ async function main() {
   }
 
   const advertiserToken = await advertiserChecks();
-  // A high bid is not a shortcut around the vesting rule: it just means one
-  // verified view can cross the $1.00 qualification threshold inside a test.
-  const cpiMicro = 2_000_000;
+  // A high bid is not a shortcut around the vesting rule: one verified view
+  // crosses the $1.00 referral threshold and the $5.00 payout threshold, so
+  // the reviewer payout leg can run against a freshly created account.
+  const cpiMicro = 10_000_000;
   const campaign = await campaignChecks(advertiserToken, cpiMicro);
+  let referredToken = null;
   if (campaign?.status === "active" && isLoopback) {
-    await referralChecks(cpiMicro);
+    referredToken = await referralChecks(cpiMicro);
   } else if (campaign?.status !== "active") {
     check("referral vesting", false, "skipped: no active campaign to serve");
   }
+
+  await adminChecks(advertiserToken, referredToken);
 
   const failed = results.filter((r) => !r.ok);
   const passed = results.length - failed.length;

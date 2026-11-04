@@ -57,10 +57,12 @@ API, web, extension) plus the money and privacy invariants. With the API
 running:
 
 ```bash
-pnpm smoke   # advertiser sessions, moderation, 55% payout, referral vesting
+pnpm smoke   # 30 checks: auth, moderation, 55% payout, referrals, reviewer
 ```
 
-It registers throwaway accounts, so point it at a dev database only. An
+It registers throwaway accounts, so point it at a dev database only. The
+script loads `apps/api/.env`, so a configured `ADMIN_API_KEY` exercises the
+reviewer queue and its campaign, task, and payout decisions too. An
 environment limit — such as the register rate limit after several runs in ten
 minutes — is reported as `SKIP`, not as a pass.
 
@@ -156,6 +158,14 @@ downloads the English checkpoint (~800 MB). For a fast offline loop,
 test double that speaks the same `/v1/systemone` protocol but is **not** a
 model; point `LAYA_ENDPOINT` at `http://localhost:8080` for that.
 
+The stack preloads only English and sets `LAYA_DEFAULT_MODEL=english`. Short
+task states (a URL plus a task type) carry too little language evidence for
+Laya's detector, whose own default is `multilingual`; that checkpoint is not
+preloaded, so the first task submission would trigger a lazy multi-hundred-MB
+download and blow the API's 4 s classifier budget. For non-English content,
+add `multilingual` to `LAYA_MODELS`, point `LAYA_DEFAULT_MODEL` at it, and
+expect the first request to pay the load cost.
+
 ### Running Laya without Docker
 
 If Docker is unavailable, `infra/laya-host.sh` installs the pinned upstream
@@ -168,7 +178,9 @@ curl -s http://127.0.0.1:8000/health
 
 It requires Python >=3.10, caches the checkpoint under
 `~/.local/share/meantime/hf`, and takes a few minutes on first run. Override
-`LAYA_PORT`, `LAYA_DEVICE`, or `HF_HOME` through the environment.
+`LAYA_PORT`, `LAYA_DEVICE`, or `HF_HOME` through the environment; the script
+also sets `LAYA_DEFAULT_MODEL=english` for the same task-state reason as
+compose.
 
 Laya is text-only, so social-task screenshot contents are not analysed. The
 upload itself is checked first (the object must exist, be PNG/JPEG/WebP, and be

@@ -32,6 +32,9 @@ export LAYA_PORT="${LAYA_PORT:-8000}"
 export LAYA_DEVICE="${LAYA_DEVICE:-cpu}"
 export LAYA_PRELOAD="${LAYA_PRELOAD:-1}"
 export LAYA_MODELS="${LAYA_MODELS:-english}"
+# Short task states route to `multilingual` by default, but only English is
+# preloaded here; an unresolved lazy download would exceed the API's 4s budget.
+export LAYA_DEFAULT_MODEL="${LAYA_DEFAULT_MODEL:-english}"
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
 
 exec "$VENV_DIR/bin/laya-serve"
