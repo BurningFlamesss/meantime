@@ -4,6 +4,8 @@ dist/
 .wxt/
 .web-ext-artifacts/
 .turbo/
+apps/extension/chrome-mv3
+extension-unpacked
 *.log
 .DS_Store
 .env
