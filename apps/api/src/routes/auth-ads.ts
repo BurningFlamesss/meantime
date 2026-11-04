@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, ne, or, sql } from "drizzle-orm";
 import argon2 from "argon2";
 import { createHash } from "node:crypto";
 import {
@@ -324,7 +324,12 @@ export async function adsRoutes(app: FastifyInstance, ctx: AppContext) {
     const rows = await ctx.db
       .select()
       .from(campaigns)
-      .where(eq(campaigns.status, "active"))
+      .where(
+        or(
+          eq(campaigns.status, "active"),
+          and(eq(campaigns.status, "exhausted"), or(sql`${campaigns.spendDate} is null`, ne(campaigns.spendDate, today))),
+        ),
+      )
       .orderBy(desc(campaigns.cpiMicro))
       .limit(count * 3);
 

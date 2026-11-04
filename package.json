@@ -15,6 +15,7 @@
     "db:migrate": "pnpm --filter @meantime/api db:migrate",
     "db:seed": "pnpm --filter @meantime/api db:seed",
     "db:check": "pnpm --filter @meantime/api db:check",
+    "test": "node scripts/test-unit.mjs",
     "smoke": "node scripts/smoke.mjs",
     "laya:check": "node scripts/laya-check.mjs",
     "laya:bench": "node scripts/laya-bench.mjs"

@@ -32,11 +32,33 @@ async function main(): Promise<void> {
     console.log(`  ${row.entryType}: ${row.total} µ$ (${row.entries} rows)`);
   }
 
+  // Assert every individual transaction group sums to zero
+  const unbalanced = await db
+    .select({
+      referenceType: ledgerEntries.referenceType,
+      referenceId: ledgerEntries.referenceId,
+      count: sql<number>`count(*)`,
+      total: sql<string>`sum(${ledgerEntries.amountMicro})`,
+    })
+    .from(ledgerEntries)
+    .groupBy(ledgerEntries.referenceType, ledgerEntries.referenceId)
+    .having(sql`sum(${ledgerEntries.amountMicro}) <> 0`);
+
+  if (unbalanced.length > 0) {
+    console.error(`\nFAIL: found ${unbalanced.length} unbalanced transaction group(s):`);
+    for (const group of unbalanced) {
+      console.error(
+        `  ${group.referenceType ?? "null"}:${group.referenceId ?? "null"} has ${group.count} entries summing to ${group.total} µ$`,
+      );
+    }
+    process.exit(1);
+  }
+
   if (total !== 0n) {
     console.error(`\nFAIL: ledger sums to ${total} µ$ instead of 0.`);
     process.exit(1);
   }
-  console.log("\nOK: ledger is zero-sum.");
+  console.log("\nOK: ledger is zero-sum across all accounts and per transaction.");
   process.exit(0);
 }
 

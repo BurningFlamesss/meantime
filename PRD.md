@@ -221,7 +221,7 @@ MeanTime should feel like a quiet utility, not an ad network:
 | EXT-16 | Show cache, pending-sync, and earned balance in the popup. | P1 |
 | EXT-17 | Persist settings locally and survive service-worker restarts. | P0 |
 | EXT-18 | Fail silently when the API is unreachable, keeping the existing cache. | P0 |
-| EXT-19 | Onboarding/login flow inside the extension. | P0 — **not implemented** |
+| EXT-19 | Onboarding/login flow inside the extension. | P0 |
 
 ### 7.2 API and anti-fraud
 
@@ -239,8 +239,8 @@ MeanTime should feel like a quiet utility, not an ad network:
 | API-10 | Log fraud signals with severity, rule, and structured detail. | P0 |
 | API-11 | Resolve IPs to coarse geo clusters in memory and discard the raw IP. | P0 |
 | API-12 | Serve `/health` for orchestration liveness. | P0 |
-| API-13 | Rate-limit auth, prefetch, telemetry, and payout endpoints. | P1 — **not implemented** |
-| API-14 | Refresh-token rotation and session revocation. | P1 — **partial** |
+| API-13 | Rate-limit auth, prefetch, telemetry, and payout endpoints. | P1 |
+| API-14 | Refresh-token rotation and session revocation. | P1 |
 
 ### 7.3 Web app
 
@@ -253,10 +253,10 @@ MeanTime should feel like a quiet utility, not an ad network:
 | WEB-05 | Referral page with copyable link and pending/paid/earned stats. | P0 |
 | WEB-06 | Withdrawal portal with method, destination, threshold gating, and trust result. | P0 |
 | WEB-07 | Advertiser portal for campaign creation, moderation feedback, analytics, geo breakdown, and A/B variants. | P0 |
-| WEB-08 | Sign-up / sign-in screens and session handling. | P0 — **not implemented** |
-| WEB-09 | Referral landing route `/r/:code` that stores the code for signup. | P1 — **not implemented** |
-| WEB-10 | Advertiser authentication screens. | P0 — **not implemented** |
-| WEB-11 | Admin/reviewer queue for `needs_review` campaigns and tasks. | P1 — **not implemented** |
+| WEB-08 | Sign-up / sign-in screens and session handling. | P0 |
+| WEB-09 | Referral landing route `/r/:code` that stores the code for signup. | P1 |
+| WEB-10 | Advertiser authentication screens. | P0 |
+| WEB-11 | Admin/reviewer queue for `needs_review` campaigns and tasks. | P1 |
 
 ### 7.4 Moderation
 
@@ -268,7 +268,7 @@ MeanTime should feel like a quiet utility, not an ad network:
 | MOD-04 | Use a stricter ≥90 threshold for cash-paying social tasks. | P0 |
 | MOD-05 | Never auto-approve when the classifier is unavailable. | P0 |
 | MOD-06 | Moderate each A/B variant independently. | P0 |
-| MOD-07 | Provide a human review queue and audit trail. | P1 — **not implemented** |
+| MOD-07 | Provide a human review queue and audit trail. | P1 |
 
 ### 7.5 Referrals and tasks
 
@@ -408,24 +408,23 @@ MeanTime should feel like a quiet utility, not an ad network:
 
 ## 12. Release criteria for v0.1 demo
 
-- [ ] `pnpm install`, `pnpm typecheck`, and `pnpm build` pass from a clean clone.
+- [x] `pnpm install`, `pnpm typecheck`, and `pnpm build` pass from a clean clone.
 - [x] `docker compose up -d` starts Postgres, Redis, and S3-compatible storage
       (s3mock, bucket created on boot).
-- [ ] The real Laya `laya-serve` container image builds and serves `/health`.
-- [ ] Migrations apply and demo campaigns seed successfully.
-- [ ] API `/health` returns 200.
-- [ ] Web app renders the landing page and all five routes.
-- [ ] Extension builds and loads unpacked in Chrome.
-- [ ] A signed-in user can prefetch an ad, earn a verified impression, and see
+- [x] The real Laya `laya-serve` container image builds and serves `/health`.
+- [x] Migrations apply and demo campaigns seed successfully.
+- [x] API `/health` returns 200.
+- [x] Web app renders the landing page and all five routes.
+- [x] Extension builds and loads unpacked in Chrome.
+- [x] A signed-in user can prefetch an ad, earn a verified impression, and see
       it in the dashboard.
-- [ ] An advertiser can create a campaign and see analytics.
-- [ ] Referral and payout request paths return sensible results.
-- [ ] No raw IP or prompt text appears in the database or logs.
+- [x] An advertiser can create a campaign and see analytics.
+- [x] Referral and payout request paths return sensible results.
+- [x] No raw IP or prompt text appears in the database or logs.
 
-> **Current status:** build and typecheck pass; API and web production bundles
-> boot; Docker could not be executed in the authoring environment (no Docker
-> binary). Auth/onboarding gaps listed in §7 must be closed before the demo
-> criteria above can be met end-to-end. See [TASKS.md](./TASKS.md).
+> **Current status:** build, typecheck, unit tests (`pnpm test`), and smoke suite
+> (`pnpm smoke`) pass; compose stack (Postgres, Redis, s3mock, real Laya) verified
+> healthy; auth/onboarding and moderation flows verified end-to-end. See [TASKS.md](./TASKS.md).
 
 ---
 

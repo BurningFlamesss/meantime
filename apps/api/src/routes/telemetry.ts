@@ -188,6 +188,12 @@ async function processEvent(
     const today = new Date().toISOString().slice(0, 10);
     const spentToday = campaign.spendDate === today ? campaign.spentTodayMicro : 0n;
     if (spentToday + campaign.cpiMicro > campaign.dailyBudgetMicro) {
+      if (campaign.status === "active") {
+        await tx
+          .update(campaigns)
+          .set({ status: "exhausted", updatedAt: new Date() })
+          .where(eq(campaigns.id, campaign.id));
+      }
       return { ok: false as const, reason: "campaign_budget_exhausted" };
     }
 
@@ -248,12 +254,17 @@ async function processEvent(
       referenceId: event.impressionId,
     });
 
+    const nextSpentToday = spentToday + campaign.cpiMicro;
+    const isExhausted = nextSpentToday >= campaign.dailyBudgetMicro;
+
     await tx
       .update(campaigns)
       .set({
-        spentTodayMicro: spentToday + campaign.cpiMicro,
+        spentTodayMicro: nextSpentToday,
         spentTotalMicro: campaign.spentTotalMicro + campaign.cpiMicro,
         spendDate: today,
+        status: isExhausted ? "exhausted" : "active",
+        updatedAt: new Date(),
       })
       .where(eq(campaigns.id, campaign.id));
 

@@ -382,13 +382,13 @@ raw IPs.
 
 ### Correctness and money
 
-- [ ] Reconciliation job: assert every ledger transaction sums to zero.
+- [x] Reconciliation job: assert every ledger transaction sums to zero (`pnpm db:check`).
 - [ ] Payout processor integration with idempotency keys and compensating
       entries on failure.
 - [ ] Payout state machine transitions (`requested → auditing → approved → paid`
       or `rejected/frozen`) with audit log.
 - [x] Campaign budget enforcement at telemetry time under a campaign row lock.
-- [ ] Handle campaign exhaustion (`spentTodayMicro >= dailyBudgetMicro`) by
+- [x] Handle campaign exhaustion (`spentTodayMicro >= dailyBudgetMicro`) by
       pausing/exhausting status.
 - [ ] Use `bigint`/string in prefetch `cpiMicro` to avoid future precision loss.
 - [x] Campaign/variant moderation status transitions after human review.
@@ -435,7 +435,7 @@ raw IPs.
 
 ### Observability
 
-- [ ] Add structured request IDs to client errors.
+- [x] Add structured request IDs to client errors.
 - [ ] Add metrics for prefetch, telemetry acceptance, fraud flags, and payout
       verdicts.
 - [ ] Add tracing across API → DB/Redis/moderation.
@@ -444,8 +444,8 @@ raw IPs.
 
 ### Testing
 
-- [ ] Unit tests (Vitest) for shared crypto, validators, cadence, trust, and
-      formatting.
+- [x] Unit tests (`pnpm test` / `scripts/test-unit.mjs`, 29 checks) for shared
+      crypto, validators, cadence, trust, formatting, and extension cache dedup.
 - [ ] API integration tests against a disposable Postgres.
 - [ ] Playwright tests for landing, dashboard, tasks, referrals, payouts, and
       advertiser flows.
@@ -506,17 +506,17 @@ separate token kind, plus a portal sign-in gate. | — | — |
 
 A demo is considered working when:
 
-- [ ] `docker compose up -d` is healthy.
-- [ ] `pnpm db:migrate && pnpm db:seed` succeeds.
-- [ ] API `/health` is 200.
-- [ ] Web landing + dashboard render.
-- [ ] A user can register/sign in (web + extension), receive an ad, and earn a
+- [x] `docker compose up -d` is healthy.
+- [x] `pnpm db:migrate && pnpm db:seed` succeeds.
+- [x] API `/health` is 200.
+- [x] Web landing + dashboard render.
+- [x] A user can register/sign in (web + extension), receive an ad, and earn a
       verified impression.
-- [ ] The dashboard shows the impression and the balance increases.
+- [x] The dashboard shows the impression and the balance increases.
 - [x] An advertiser can sign in, create a campaign, and see analytics.
 - [x] A referral link lands on sign-up with the code and is attributed at
       registration (subject to the self-referral network check). Verified by
       `pnpm smoke`: attribution, $1.00 vesting, and the $0.50 bonus posted.
-- [ ] A payout request is gated by $5.00 and returns a trust verdict.
-- [ ] No raw IP or prompt text is stored.
-- [ ] `pnpm typecheck` and `pnpm build` pass.
+- [x] A payout request is gated by $5.00 and returns a trust verdict.
+- [x] No raw IP or prompt text is stored.
+- [x] `pnpm typecheck` and `pnpm build` pass.

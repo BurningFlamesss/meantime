@@ -68,12 +68,13 @@ async function main(): Promise<void> {
   await advertiserListRoutes(app, ctx);
   await adminRoutes(app, ctx);
 
-  app.setErrorHandler((err: Error, _req, reply) => {
+  app.setErrorHandler((err: Error, req, reply) => {
+    const requestId = req.id;
     if (err.name === "ZodError") {
-      return reply.code(400).send({ error: "validation_failed", issues: err.message });
+      return reply.code(400).send({ error: "validation_failed", issues: err.message, requestId });
     }
-    app.log.error(err);
-    return reply.code(500).send({ error: "internal_error" });
+    app.log.error({ err, requestId });
+    return reply.code(500).send({ error: "internal_error", requestId });
   });
 
   await app.listen({ port: env.PORT, host: "0.0.0.0" });
