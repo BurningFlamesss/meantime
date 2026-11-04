@@ -79,6 +79,9 @@ function Landing() {
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-6 text-sm text-neutral-400">
           <span>MeanTime — ads in the meantime.</span>
           <nav className="flex items-center gap-4">
+            <Link to="/dashboard" className="hover:text-neutral-900">
+              Dashboard
+            </Link>
             <Link to="/privacy" className="hover:text-neutral-900">
               Privacy
             </Link>

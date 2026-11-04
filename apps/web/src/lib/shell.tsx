@@ -76,6 +76,12 @@ export function Shell({ children }: { children: ReactNode }) {
       <footer className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-6 py-8 text-xs text-neutral-400">
         <span>MeanTime — ads in the meantime.</span>
         <nav className="flex items-center gap-4">
+          <Link to="/" className="hover:text-neutral-900">
+            Website
+          </Link>
+          <Link to="/dashboard" className="hover:text-neutral-900">
+            Dashboard
+          </Link>
           <Link to="/privacy" className="hover:text-neutral-900">
             Privacy
           </Link>

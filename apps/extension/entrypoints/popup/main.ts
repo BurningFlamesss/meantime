@@ -267,6 +267,9 @@ async function init(): Promise<void> {
   el<HTMLButtonElement>("open-dashboard").addEventListener("click", () => {
     void chrome.tabs.create({ url: `${WEB_BASE}/dashboard` });
   });
+  el<HTMLButtonElement>("open-dashboard-link").addEventListener("click", () => {
+    void chrome.tabs.create({ url: `${WEB_BASE}/dashboard` });
+  });
   el<HTMLButtonElement>("open-site").addEventListener("click", () => {
     void chrome.tabs.create({ url: WEB_BASE });
   });
