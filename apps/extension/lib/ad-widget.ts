@@ -33,6 +33,8 @@ const CSS = `
   max-width: calc(100% - 110px);
   z-index: 20;
   pointer-events: auto;
+  display: flex;
+  align-items: center;
 }
 :host([data-placement="under_prompt"]) .mt-wrap {
   margin: 0;
@@ -52,9 +54,15 @@ const CSS = `
   margin-bottom: 8px;
   z-index: 40;
   pointer-events: none;
+  height: 0;
+  overflow: visible;
 }
 :host([data-placement="above_composer"]) .mt-wrap {
-  margin: 0 auto;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  margin: 0 auto 8px auto;
   max-width: 768px;
   width: calc(100% - 24px);
   pointer-events: auto;
@@ -64,12 +72,15 @@ const CSS = `
 
 :host([data-placement="ai_footer"]) {
   position: absolute;
+  top: 0;
   bottom: 0;
-  left: 130px;
+  left: 175px;
   right: 0;
-  max-width: calc(100% - 130px);
+  max-width: calc(100% - 175px);
   z-index: 20;
   pointer-events: auto;
+  display: flex;
+  align-items: center;
 }
 :host([data-placement="ai_footer"]) .mt-wrap {
   margin: 0;
@@ -83,23 +94,30 @@ const CSS = `
 
 :host([data-placement="thinking_indicator"]) {
   position: absolute;
-  top: 100%;
-  left: 0;
+  top: 0;
+  bottom: 0;
+  left: 160px;
   right: 0;
-  margin-top: 6px;
-  z-index: 25;
+  max-width: calc(100% - 160px);
+  z-index: 20;
   pointer-events: auto;
+  display: flex;
+  align-items: center;
 }
 :host([data-placement="thinking_indicator"]) .mt-wrap {
   margin: 0;
-  max-width: 768px;
   width: 100%;
-  padding: 6px 10px;
+  max-width: 100%;
+  height: 32px;
+  min-height: 32px;
+  padding: 2px 8px;
+  gap: 8px;
 }
 
-/* Compact layout for row-clipped placements (under_prompt and ai_footer) */
+/* Compact layout for row-clipped placements (under_prompt, ai_footer, thinking_indicator) */
 :host([data-placement="under_prompt"]) .mt-main,
-:host([data-placement="ai_footer"]) .mt-main {
+:host([data-placement="ai_footer"]) .mt-main,
+:host([data-placement="thinking_indicator"]) .mt-main {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -107,7 +125,8 @@ const CSS = `
   overflow: hidden;
 }
 :host([data-placement="under_prompt"]) .mt-headline,
-:host([data-placement="ai_footer"]) .mt-headline {
+:host([data-placement="ai_footer"]) .mt-headline,
+:host([data-placement="thinking_indicator"]) .mt-headline {
   font-size: 12px;
   line-height: 1;
   white-space: nowrap;
@@ -117,7 +136,8 @@ const CSS = `
   margin: 0;
 }
 :host([data-placement="under_prompt"]) .mt-body,
-:host([data-placement="ai_footer"]) .mt-body {
+:host([data-placement="ai_footer"]) .mt-body,
+:host([data-placement="thinking_indicator"]) .mt-body {
   font-size: 11px;
   line-height: 1;
   white-space: nowrap;
@@ -128,24 +148,28 @@ const CSS = `
   flex: 1 1 auto;
 }
 :host([data-placement="under_prompt"]) .mt-cta,
-:host([data-placement="ai_footer"]) .mt-cta {
+:host([data-placement="ai_footer"]) .mt-cta,
+:host([data-placement="thinking_indicator"]) .mt-cta {
   padding: 3px 8px;
   font-size: 11px;
   line-height: 1.2;
 }
 :host([data-placement="under_prompt"]) .mt-badge,
-:host([data-placement="ai_footer"]) .mt-badge {
+:host([data-placement="ai_footer"]) .mt-badge,
+:host([data-placement="thinking_indicator"]) .mt-badge {
   font-size: 9px;
   padding: 2px 5px;
   letter-spacing: .04em;
 }
 :host([data-placement="under_prompt"]) .mt-progress,
-:host([data-placement="ai_footer"]) .mt-progress {
+:host([data-placement="ai_footer"]) .mt-progress,
+:host([data-placement="thinking_indicator"]) .mt-progress {
   width: 32px;
   height: 4px;
 }
 :host([data-placement="under_prompt"]) .mt-menu,
-:host([data-placement="ai_footer"]) .mt-menu {
+:host([data-placement="ai_footer"]) .mt-menu,
+:host([data-placement="thinking_indicator"]) .mt-menu {
   top: auto;
   bottom: 100%;
   margin-bottom: 6px;
@@ -154,7 +178,8 @@ const CSS = `
 
 @media (max-width: 640px) {
   :host([data-placement="under_prompt"]) .mt-body,
-  :host([data-placement="ai_footer"]) .mt-body {
+  :host([data-placement="ai_footer"]) .mt-body,
+  :host([data-placement="thinking_indicator"]) .mt-body {
     display: none;
   }
 }
@@ -460,6 +485,7 @@ export class AdWidget {
     if (placement) {
       this.host.dataset.placement = placement;
       this.wrap.dataset.placement = placement;
+      this.applyHostStyles(placement);
     }
     if (theme) {
       this.setTheme(theme);
@@ -480,6 +506,54 @@ export class AdWidget {
     this.animateProgress();
   }
 
+  private applyHostStyles(placement: string): void {
+    if (placement === "above_composer") {
+      this.host.style.position = "absolute";
+      this.host.style.bottom = "100%";
+      this.host.style.left = "0";
+      this.host.style.right = "0";
+      this.host.style.marginBottom = "8px";
+      this.host.style.height = "0";
+      this.host.style.minHeight = "0";
+      this.host.style.lineHeight = "0";
+      this.host.style.margin = "0";
+      this.host.style.padding = "0";
+      this.host.style.border = "none";
+      this.host.style.overflow = "visible";
+      this.host.style.pointerEvents = "none";
+      this.host.style.zIndex = "40";
+    } else if (placement === "under_prompt") {
+      this.host.style.position = "absolute";
+      this.host.style.bottom = "0";
+      this.host.style.left = "0";
+      this.host.style.right = "110px";
+      this.host.style.maxWidth = "calc(100% - 110px)";
+      this.host.style.height = "32px";
+      this.host.style.zIndex = "20";
+      this.host.style.pointerEvents = "auto";
+    } else if (placement === "ai_footer") {
+      this.host.style.position = "absolute";
+      this.host.style.top = "0";
+      this.host.style.bottom = "0";
+      this.host.style.left = "175px";
+      this.host.style.right = "0";
+      this.host.style.maxWidth = "calc(100% - 175px)";
+      this.host.style.height = "32px";
+      this.host.style.zIndex = "20";
+      this.host.style.pointerEvents = "auto";
+    } else if (placement === "thinking_indicator") {
+      this.host.style.position = "absolute";
+      this.host.style.top = "0";
+      this.host.style.bottom = "0";
+      this.host.style.left = "160px";
+      this.host.style.right = "0";
+      this.host.style.maxWidth = "calc(100% - 160px)";
+      this.host.style.height = "32px";
+      this.host.style.zIndex = "20";
+      this.host.style.pointerEvents = "auto";
+    }
+  }
+
   reanchor(target: HTMLElement | MountTarget): void {
     if (this.disposed || !this.host) return;
     const el = "element" in target ? target.element : target;
@@ -488,6 +562,10 @@ export class AdWidget {
     if (pos === "after" && el.nextElementSibling === this.host) return;
     if (pos === "before" && el.previousElementSibling === this.host) return;
     if (pos === "append" && el.lastElementChild === this.host) return;
+
+    if (this.host.dataset.placement) {
+      this.applyHostStyles(this.host.dataset.placement);
+    }
 
     if (pos === "before") {
       el.before(this.host);

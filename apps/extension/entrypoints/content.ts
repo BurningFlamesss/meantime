@@ -81,6 +81,7 @@ class MeanTimeController {
   } | null = null;
 
   private generationObserver: MutationObserver | null = null;
+  private generationInterval: number | null = null;
   private generationCleanupTimer: number | null = null;
   private lifetimeTimer: number | null = null;
   private connectionTimer: number | null = null;
@@ -449,6 +450,15 @@ class MeanTimeController {
       } else if (placement === "above_composer") {
         const slot = this.adapter.getAboveComposerSlot();
         if (slot) this.activeWidget.reanchor(slot);
+      } else if (placement === "ai_footer") {
+        const latestAi = this.adapter.findLatestAiMessage();
+        if (latestAi) {
+          const slot = this.adapter.getAiMessageFooterSlot(latestAi);
+          if (slot) this.activeWidget.reanchor(slot);
+        }
+      } else if (placement === "thinking_indicator") {
+        const slot = this.adapter.getThinkingSlot();
+        if (slot) this.activeWidget.reanchor(slot);
       }
     });
     this.reanchorObserver.observe(document.body, { childList: true, subtree: true });
@@ -477,17 +487,15 @@ class MeanTimeController {
    * the ad instantly.
    */
   private watchGeneration(widget: AdWidget, initialAiNode: HTMLElement | null): void {
-    // The baseline is the answer that existed at submit, not at mount. If the
-    // model already started replying while the ad was mounting, that new node
-    // is detected on the first check and counts as the AI mutation.
+    // The baseline is the answer that existed at submit, not at mount.
     this.initialAiNode = initialAiNode;
-    const root =
-      initialAiNode?.parentElement ??
+
+    const threadRoot =
       document.querySelector<HTMLElement>(
-        "main, [data-app-shell-focus-area='main'], div[data-thread-user-message-navigation-content], .thread-scroll-container",
+        "div[data-thread-user-message-navigation-content], .thread-scroll-container, [data-chatgpt-conversation-selection-target], [data-app-shell-focus-area='main'], main",
       ) ??
+      initialAiNode?.closest<HTMLElement>(".thread-scroll-container, [data-thread-user-message-navigation-content], main") ??
       document.body;
-    if (!root) return;
 
     const completeSelector = this.adapter.config.generationCompleteSelector;
     let stopSeen = false;
@@ -502,6 +510,7 @@ class MeanTimeController {
       if (stopBtn) {
         stopSeen = true;
       } else if (stopSeen) {
+        // Generation finished!
         this.teardownObserver();
         if (this.activeLease?.displayMode === "wait_time_only" && this.activeWidget) {
           this.finalize("stream_started");
@@ -511,21 +520,24 @@ class MeanTimeController {
 
       const latest = this.adapter.findLatestAiMessage();
       const isNew = this.initialAiNode === null ? latest !== null : latest !== null && latest !== this.initialAiNode;
-      if (!isNew || !latest) return;
 
-      const hasOutput = (latest.textContent?.trim().length ?? 0) > 0;
-      if (hasOutput && this.firstOutputAt === null) {
-        this.firstOutputAt = Date.now();
-        this.onFirstAiOutput(widget);
+      if (isNew && latest) {
+        const textLen = latest.textContent?.trim().length ?? 0;
+        if (textLen > 0) {
+          if (this.firstOutputAt === null) {
+            this.firstOutputAt = Date.now();
+          }
+          if (this.activeLease?.displayMode === "wait_time_only") {
+            this.teardownObserver();
+            this.finalize("stream_started");
+            return;
+          }
+        }
       }
-      const complete = latest.matches(completeSelector) || latest.querySelector(completeSelector) !== null;
+
+      const complete = latest ? (latest.matches(completeSelector) || latest.querySelector(completeSelector) !== null) : false;
       if (complete) {
         this.teardownObserver();
-        // A fast model can finish before the 5 s threshold. In wait-time-only
-        // mode that ends the ad (nothing is owed for a wait that never
-        // happened). In persist mode the ad is already anchored and must stay
-        // until it earns, otherwise a <5 s answer would silently pay nothing
-        // while the user was still reading the ad.
         if (this.activeLease?.displayMode === "wait_time_only" && this.activeWidget) {
           this.finalize("stream_started");
         }
@@ -533,7 +545,9 @@ class MeanTimeController {
     };
 
     this.generationObserver = new MutationObserver(check);
-    this.generationObserver.observe(root, { childList: true, subtree: true, characterData: true });
+    this.generationObserver.observe(threadRoot, { childList: true, subtree: true, characterData: true });
+    // Also poll every 50ms as a rock-solid failsafe to ensure instant closure on first token in wait_time_only mode
+    this.generationInterval = window.setInterval(check, 50);
     this.generationCleanupTimer = window.setTimeout(() => this.teardownObserver(), MAX_AD_LIFETIME_MS);
     check();
   }
@@ -542,19 +556,19 @@ class MeanTimeController {
     if (!this.activeLease || this.activeLease.closed) return;
 
     if (this.activeLease.displayMode === "wait_time_only") {
-      // Mode 1: instant removal the moment the AI starts streaming, even if
-      // the answer arrives before 5 s. The event still reports the real
-      // accrued time; the server rejects anything below the threshold.
       this.finalize("stream_started");
     } else if (widget.timer.cumulativeMs >= MIN_VIEWABLE_MS) {
       this.finalize("earned");
     }
-    // Mode 2 with < 5 s accrued: keep the ad anchored; onEarned closes it.
   }
 
   private teardownObserver(): void {
     this.generationObserver?.disconnect();
     this.generationObserver = null;
+    if (this.generationInterval !== null) {
+      clearInterval(this.generationInterval);
+      this.generationInterval = null;
+    }
     if (this.generationCleanupTimer !== null) {
       clearTimeout(this.generationCleanupTimer);
       this.generationCleanupTimer = null;

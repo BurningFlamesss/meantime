@@ -41,46 +41,81 @@ export class OpenAiAdapter extends BaseAdapter {
     return { element: turn, position: "append" };
   }
 
-  override getAiMessageFooterSlot(latestAiNode: HTMLElement): MountTarget {
-    const searchUnit =
-      latestAiNode.closest<HTMLElement>("[data-chatgpt-search-unit-key], [data-turn-key]") ?? latestAiNode;
-    const actionRow =
-      searchUnit.querySelector<HTMLElement>(".turn-action-controls, [class*='turn-action-controls']")?.parentElement ??
-      searchUnit.querySelector<HTMLElement>(".flex.items-center, [class*='actionRow']") ??
-      latestAiNode.querySelector<HTMLElement>(".turn-action-controls, [class*='turn-action-controls'], .flex.items-center");
+  override getAiMessageFooterSlot(latestAiNode: HTMLElement): MountTarget | null {
+    const turn =
+      latestAiNode.closest<HTMLElement>(
+        "[data-turn-key], [data-content-search-turn-key], [data-chatgpt-search-unit-key], .group, .block-BQZwFn",
+      ) ?? latestAiNode.parentElement ?? latestAiNode;
+
+    // Search for any of the assistant action buttons (copy, read aloud, share, try again, more)
+    const actionBtn = turn.querySelector<HTMLElement>(
+      "button[aria-label*='Copy' i], button[aria-label*='Read aloud' i], button[aria-label*='Share' i], button[aria-label*='Try again' i], button[aria-label*='Regenerate' i], button[aria-label*='Good' i], button[aria-label*='Bad' i], button[aria-label*='More' i]",
+    );
+
+    let actionRow: HTMLElement | null = null;
+    if (actionBtn) {
+      actionRow =
+        actionBtn.closest<HTMLElement>(".flex.items-center, [class*='turn-action-controls'], [class*='actionRow'], .flex.gap-1, .flex.gap-0\\.5") ??
+        actionBtn.parentElement?.parentElement ??
+        actionBtn.parentElement;
+    } else {
+      actionRow = turn.querySelector<HTMLElement>(
+        "[class*='turn-action-controls'], [class*='actionRow'], div.flex:has(> button[aria-label*='Copy' i])",
+      );
+    }
 
     if (actionRow) {
       actionRow.style.position = "relative";
+      actionRow.style.width = "100%";
       actionRow.style.minHeight = "32px";
       return { element: actionRow, position: "append" };
     }
 
-    searchUnit.style.position = "relative";
-    return { element: searchUnit, position: "append" };
+    return null;
   }
 
   override getThinkingSlot(): MountTarget | null {
     const selector = [
-      "button[aria-label*='Thought' i]",
       "button[aria-label*='Thinking' i]",
+      "button[aria-label*='Thought' i]",
       "div[data-testid='thinking-indicator']",
       "[data-component='thinking']",
       "[data-state='thinking']",
       "[data-testid*='reasoning']",
+      "button:has(.loading-shimmer)",
+      "span:has(> .loading-shimmer)",
+      "div:has(> svg.animate-spin)",
       "div[class*='thinking' i]",
       "div[class*='thought' i]",
       "div[class*='reasoning' i]",
-      "span:has(> .loading-shimmer)",
     ].join(", ");
 
     const matches = Array.from(document.querySelectorAll<HTMLElement>(selector));
-    const latest = matches[matches.length - 1];
+    let latest: HTMLElement | null = matches.length > 0 ? (matches[matches.length - 1] ?? null) : null;
+
+    if (!latest) {
+      const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>("button"));
+      for (let i = buttons.length - 1; i >= 0; i--) {
+        const btn = buttons[i];
+        if (!btn) continue;
+        const txt = btn.textContent?.trim().toLowerCase() ?? "";
+        if (txt.startsWith("thinking") || txt.startsWith("thought")) {
+          latest = btn;
+          break;
+        }
+      }
+    }
+
     if (!latest) return null;
 
-    const container = latest instanceof HTMLButtonElement || latest.tagName === "BUTTON"
-      ? (latest.parentElement ?? latest)
-      : latest;
+    const container =
+      (latest instanceof HTMLButtonElement || latest.tagName === "BUTTON" ? latest.parentElement : null) ??
+      latest.closest<HTMLElement>(".flex.items-center, div:has(> button)") ??
+      latest;
+
     container.style.position = "relative";
+    container.style.width = "100%";
+    container.style.minHeight = "32px";
     return { element: container, position: "append" };
   }
 
