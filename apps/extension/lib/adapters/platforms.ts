@@ -1,6 +1,15 @@
 import { PLATFORM_CONFIGS } from "@meantime/shared";
 import { BaseAdapter, type MountTarget } from "./base";
 
+function anchorFor(el: HTMLElement): HTMLElement {
+  return (
+    el.closest<HTMLElement>("[data-chatgpt-search-unit-key]")?.parentElement ??
+    el.closest<HTMLElement>("[data-turn-key]") ??
+    el.closest<HTMLElement>(".group\\/user-message")?.parentElement ??
+    el
+  );
+}
+
 export class OpenAiAdapter extends BaseAdapter {
   readonly platformId = "openai";
   readonly config = PLATFORM_CONFIGS.openai;
@@ -51,82 +60,39 @@ export class OpenAiAdapter extends BaseAdapter {
         "[data-turn-key], [data-content-search-turn-key], [data-chatgpt-search-unit-key], .group, .block-BQZwFn, article",
       ) ?? latestAiNode.parentElement ?? latestAiNode;
 
-    // Search for the assistant action controls container or buttons
-    const controls = turn.querySelector<HTMLElement>("[class*='turn-action-controls'], .turn-action-controls");
-    const actionBtn = controls
-      ? null
-      : turn.querySelector<HTMLElement>(
-          "button[aria-label*='Copy' i], button[aria-label*='Read aloud' i], button[aria-label*='Share' i], button[aria-label*='Try again' i], button[aria-label*='Regenerate' i], button[aria-label*='Good' i], button[aria-label*='Bad' i], button[aria-label*='More' i]",
-        );
+    // Search for any button in the action row
+    const btn = turn.querySelector<HTMLElement>(
+      "button[aria-label*='Copy' i], button[aria-label*='Read aloud' i], button[aria-label*='Share' i], button[aria-label*='Try again' i], button[aria-label*='Regenerate' i], button[aria-label*='Good' i], button[aria-label*='Bad' i], button[aria-label*='More' i]",
+    );
 
-    let actionRow: HTMLElement | null = null;
-    if (controls) {
-      actionRow = controls.parentElement ?? controls;
-    } else if (actionBtn) {
-      // Must NOT match actionBtn itself — climb to parent container
-      actionRow =
-        actionBtn.parentElement?.closest<HTMLElement>(".flex.items-center, [class*='actionRow'], .flex.gap-1, .flex.gap-0\\.5") ??
-        actionBtn.parentElement;
+    if (btn) {
+      // Find the exact flex row containing the buttons (e.g. .turn-action-controls)
+      const flexRow =
+        btn.closest<HTMLElement>("[class*='turn-action-controls'], .turn-action-controls") ??
+        btn.parentElement;
+
+      if (flexRow) {
+        return { element: flexRow, position: "append" };
+      }
     }
 
-    if (actionRow) {
-      if (getComputedStyle(actionRow).position === "static") {
-        actionRow.style.position = "relative";
-      }
-      actionRow.style.width = "100%";
-      actionRow.style.minHeight = "32px";
-      return { element: actionRow, position: "append" };
+    const controls = turn.querySelector<HTMLElement>("[class*='turn-action-controls'], .turn-action-controls");
+    if (controls) {
+      return { element: controls, position: "append" };
     }
 
     return null;
   }
 
   override getThinkingSlot(): MountTarget | null {
-    // Only match ACTIVE thinking indicator, NEVER completed "Thought for X s" button!
-    const selector = [
-      "button[aria-label*='Thinking' i]",
-      "div[data-testid='thinking-indicator']",
-      "[data-component='thinking']",
-      "[data-state='thinking']",
-      "[data-testid*='reasoning']:not([data-state='complete'])",
-      "button:has(.loading-shimmer)",
-      "span:has(> .loading-shimmer)",
-      "div:has(> svg.animate-spin)",
-      "button:has(svg.animate-spin)",
-      "div[class*='thinking' i]:not([class*='thought' i])",
-    ].join(", ");
-
-    const matches = Array.from(document.querySelectorAll<HTMLElement>(selector));
-    let latest: HTMLElement | null = matches.length > 0 ? (matches[matches.length - 1] ?? null) : null;
-
-    if (!latest) {
-      const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>("button"));
-      for (let i = buttons.length - 1; i >= 0; i--) {
-        const btn = buttons[i];
-        if (!btn) continue;
-        const txt = btn.textContent?.trim().toLowerCase() ?? "";
-        // Match only active "thinking", NEVER "thought"
-        if (txt.startsWith("thinking")) {
-          latest = btn;
-          break;
-        }
-      }
+    // Reference-to-take technique: anchor after the user prompt turn container.
+    // This inserts the ad in a full-width block row directly above the thinking bubble
+    // and AI response, active throughout the thinking time and without obscuring content.
+    const user = this.findLatestUserMessage();
+    if (user) {
+      return { element: anchorFor(user), position: "after" };
     }
-
-    if (!latest) return null;
-
-    const container =
-      (latest instanceof HTMLButtonElement || latest.tagName === "BUTTON" ? latest.parentElement : null) ??
-      latest.parentElement?.closest<HTMLElement>(".flex.items-center, div:has(> button)") ??
-      latest.parentElement ??
-      latest;
-
-    if (getComputedStyle(container).position === "static") {
-      container.style.position = "relative";
-    }
-    container.style.width = "100%";
-    container.style.minHeight = "32px";
-    return { element: container, position: "append" };
+    return null;
   }
 
   override getAboveComposerSlot(): MountTarget | null {
@@ -185,9 +151,14 @@ export class GeminiAdapter extends BaseAdapter {
   readonly config = PLATFORM_CONFIGS.gemini;
 
   override getUserMessageActionSlot(latestMessageNode: HTMLElement): MountTarget {
-    const action = latestMessageNode.querySelector<HTMLElement>(".query-actions, [class*='actions']") ?? latestMessageNode;
-    action.style.position = "relative";
-    return { element: action, position: "append" };
+    const userQuery = latestMessageNode.closest<HTMLElement>("user-query") ?? latestMessageNode;
+    return { element: userQuery, position: "after" };
+  }
+
+  override getThinkingSlot(): MountTarget | null {
+    const user = this.findLatestUserMessage();
+    if (user) return this.getUserMessageActionSlot(user);
+    return null;
   }
 }
 
@@ -199,12 +170,16 @@ export class ClaudeAdapter extends BaseAdapter {
     for (const sel of ["[data-cds='UserMessage']", "[data-user-message-bubble]"]) {
       const bubble = latestMessageNode.closest<HTMLElement>(sel);
       if (bubble?.parentElement) {
-        bubble.parentElement.style.position = "relative";
-        return { element: bubble.parentElement, position: "append" };
+        return { element: bubble.parentElement, position: "after" };
       }
     }
-    latestMessageNode.style.position = "relative";
-    return { element: latestMessageNode, position: "append" };
+    return { element: latestMessageNode, position: "after" };
+  }
+
+  override getThinkingSlot(): MountTarget | null {
+    const user = this.findLatestUserMessage();
+    if (user) return this.getUserMessageActionSlot(user);
+    return null;
   }
 }
 

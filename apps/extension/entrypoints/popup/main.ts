@@ -56,6 +56,7 @@ async function init(): Promise<void> {
   const statBalance = el<HTMLElement>("stat-balance");
   const statCache = el<HTMLElement>("stat-cache");
   const statPending = el<HTMLElement>("stat-pending");
+  const syncNow = el<HTMLButtonElement>("sync-now");
 
   apiBase.value = await getApiBase();
 
@@ -293,6 +294,27 @@ async function init(): Promise<void> {
       void chrome.runtime.sendMessage({ type: "prefetch_now" }).then(() => loadStatus()).catch(() => undefined);
     }
       });
+    }
+  });
+
+  syncNow.addEventListener("click", async () => {
+    syncNow.disabled = true;
+    syncNow.textContent = "Syncing…";
+    try {
+      await chrome.runtime.sendMessage({ type: "flush_now" });
+      await loadStatus();
+      await loadBalance();
+      syncNow.textContent = "✓ Synced";
+      setTimeout(() => {
+        syncNow.textContent = "↻ Sync pending now";
+        syncNow.disabled = false;
+      }, 1500);
+    } catch {
+      syncNow.textContent = "Sync failed";
+      setTimeout(() => {
+        syncNow.textContent = "↻ Sync pending now";
+        syncNow.disabled = false;
+      }, 2000);
     }
   });
 

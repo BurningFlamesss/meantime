@@ -93,47 +93,40 @@ const CSS = `
 }
 
 :host([data-placement="ai_footer"]) {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 175px;
-  right: 0;
-  max-width: calc(100% - 175px);
-  z-index: 20;
-  pointer-events: auto;
-  display: flex;
+  display: inline-flex;
   align-items: center;
+  position: relative;
+  height: 32px;
+  max-height: 32px;
+  margin-left: 8px;
+  flex: 0 1 auto;
+  pointer-events: auto;
+  z-index: 10;
 }
 :host([data-placement="ai_footer"]) .mt-wrap {
   margin: 0;
-  width: 100%;
+  width: auto;
   max-width: 100%;
-  height: 32px;
-  min-height: 32px;
+  height: 30px;
+  min-height: 30px;
   padding: 2px 8px;
   gap: 8px;
 }
 
 :host([data-placement="thinking_indicator"]) {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 160px;
-  right: 0;
-  max-width: calc(100% - 160px);
-  z-index: 20;
+  display: block;
+  width: 100%;
+  position: relative;
+  margin: 6px 0;
   pointer-events: auto;
-  display: flex;
-  align-items: center;
+  z-index: 10;
 }
 :host([data-placement="thinking_indicator"]) .mt-wrap {
-  margin: 0;
-  width: 100%;
-  max-width: 100%;
-  height: 32px;
-  min-height: 32px;
-  padding: 2px 8px;
-  gap: 8px;
+  margin: 0 auto;
+  max-width: 768px;
+  width: calc(100% - 24px);
+  padding: 8px 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
 /* Compact layout for row-clipped placements (under_prompt, ai_footer, thinking_indicator) */
@@ -580,25 +573,22 @@ export class AdWidget {
       this.host.style.zIndex = "20";
       this.host.style.pointerEvents = "auto";
     } else if (placement === "ai_footer") {
-      this.host.style.position = "absolute";
-      this.host.style.top = "0";
-      this.host.style.bottom = "0";
-      this.host.style.left = "175px";
-      this.host.style.right = "0";
-      this.host.style.maxWidth = "calc(100% - 175px)";
+      this.host.style.position = "relative";
+      this.host.style.display = "inline-flex";
+      this.host.style.alignItems = "center";
       this.host.style.height = "32px";
-      this.host.style.zIndex = "20";
+      this.host.style.maxHeight = "32px";
+      this.host.style.marginLeft = "8px";
+      this.host.style.flex = "0 1 auto";
       this.host.style.pointerEvents = "auto";
+      this.host.style.zIndex = "10";
     } else if (placement === "thinking_indicator") {
-      this.host.style.position = "absolute";
-      this.host.style.top = "0";
-      this.host.style.bottom = "0";
-      this.host.style.left = "160px";
-      this.host.style.right = "0";
-      this.host.style.maxWidth = "calc(100% - 160px)";
-      this.host.style.height = "32px";
-      this.host.style.zIndex = "20";
+      this.host.style.position = "relative";
+      this.host.style.display = "block";
+      this.host.style.width = "100%";
+      this.host.style.margin = "6px 0";
       this.host.style.pointerEvents = "auto";
+      this.host.style.zIndex = "10";
     }
   }
 

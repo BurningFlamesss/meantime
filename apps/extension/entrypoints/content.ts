@@ -238,7 +238,7 @@ class MeanTimeController {
       const resolved = await this.waitForMountPoint(
         settings.placement,
         initialAiNode,
-        settings.placement === "thinking_indicator" || settings.placement === "ai_footer" ? 1_000 : 3_000,
+        settings.placement === "ai_footer" ? 15_000 : 3_000,
       );
       if (!resolved || !resolved.target) {
         console.warn("[MeanTime] Could not find mount point for placement:", settings.placement);
@@ -373,10 +373,15 @@ class MeanTimeController {
             }
           }
         } else if (placement === "thinking_indicator") {
-          const thinking = this.adapter.getThinkingSlot();
-          if (thinking) {
-            finish({ target: thinking, placement: "thinking_indicator" });
-            return true;
+          const latest = this.adapter.findLatestUserMessage();
+          const key = this.adapter.getMessageKey(latest);
+          const isNew = this.preSubmitUserMsgKey === null ? latest !== null : key !== this.preSubmitUserMsgKey;
+          if (isNew && latest) {
+            const thinking = this.adapter.getThinkingSlot();
+            if (thinking) {
+              finish({ target: thinking, placement: "thinking_indicator" });
+              return true;
+            }
           }
         } else if (placement === "ai_footer") {
           const latestAi = this.adapter.findLatestAiMessage();
