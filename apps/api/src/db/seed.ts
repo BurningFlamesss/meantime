@@ -47,7 +47,7 @@ async function main(): Promise<void> {
       targetUrl: "https://example.com/promptkit",
       dailyBudgetMicro: 3_000_000n,
       cpiMicro: 15_000n,
-      targetPlatforms: ["openai", "claude"],
+      targetPlatforms: ["openai", "gemini", "claude", "grok", "deepseek"],
       maxPerDayPerUser: 2,
       cooldownSec: 3600,
     },

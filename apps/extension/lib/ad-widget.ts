@@ -126,7 +126,7 @@ const CSS = `
 }
 
 /* Non-OpenAI / Gemini platform override: render flow-based container so it works in Angular layouts */
-:host([data-platform="gemini"]) {
+:host([data-platform="gemini"]:not([data-placement="above_composer"])) {
   position: relative !important;
   display: block !important;
   width: 100% !important;
@@ -139,7 +139,7 @@ const CSS = `
   z-index: 20 !important;
   pointer-events: auto !important;
 }
-:host([data-platform="gemini"]) .mt-wrap {
+:host([data-platform="gemini"]:not([data-placement="above_composer"])) .mt-wrap {
   position: relative !important;
   margin: 0 auto !important;
   max-width: 768px !important;
@@ -364,7 +364,7 @@ const CSS = `
 `;
 
 export interface WidgetCallbacks {
-  onDismiss: (reason: "dismissed" | "snoozed", snoozeMinutes?: number) => void;
+  onDismiss: (reason: "dismissed" | "snoozed" | "stream_started", snoozeMinutes?: number) => void;
   onEarned: () => void;
   onClickCta: () => void;
 }
@@ -378,9 +378,11 @@ export class AdWidget {
   readonly hover: HoverTracker;
   readonly requiredDurationMs: number;
   private isHovering = false;
+  private unhoverTimer: number | null = null;
   private isEarned = false;
   private pendingDestroyOnLeave = false;
   private pendingEarnedFade = false;
+  private pendingCloseReason: "dismissed" | "snoozed" | "stream_started" | "earned" | null = null;
   private disposed = false;
 
   constructor(
@@ -447,6 +449,11 @@ export class AdWidget {
     closeBtn.textContent = "×";
     closeBtn.addEventListener("click", () => {
       this.isHovering = false;
+      this.pendingDestroyOnLeave = false;
+      if (this.unhoverTimer !== null) {
+        clearTimeout(this.unhoverTimer);
+        this.unhoverTimer = null;
+      }
       this.callbacks.onDismiss("dismissed");
       this.destroy(false);
     });
@@ -468,6 +475,11 @@ export class AdWidget {
       item.textContent = label;
       item.addEventListener("click", () => {
         this.isHovering = false;
+        this.pendingDestroyOnLeave = false;
+        if (this.unhoverTimer !== null) {
+          clearTimeout(this.unhoverTimer);
+          this.unhoverTimer = null;
+        }
         this.callbacks.onDismiss("snoozed", minutes);
         this.destroy(false);
       });
@@ -509,30 +521,57 @@ export class AdWidget {
 
     // Track active hover: timer keeps ticking forward.
     // If user is hovering over the ad, the ad does NOT disappear until pointer leaves.
-    this.wrap.addEventListener("pointerenter", () => {
+    const onEnter = () => {
+      if (this.unhoverTimer !== null) {
+        clearTimeout(this.unhoverTimer);
+        this.unhoverTimer = null;
+      }
       this.isHovering = true;
-    });
+    };
 
-    this.wrap.addEventListener("pointerleave", (e: PointerEvent) => {
-      if (e.relatedTarget && this.wrap.contains(e.relatedTarget as Node)) {
-        return; // Transition between child elements inside the ad
-      }
-      this.isHovering = false;
-      if (this.pendingDestroyOnLeave) {
-        this.pendingDestroyOnLeave = false;
-        if (this.isEarned) {
-          this.callbacks.onEarned();
+    const onLeave = () => {
+      if (this.unhoverTimer !== null) clearTimeout(this.unhoverTimer);
+      this.unhoverTimer = window.setTimeout(() => {
+        this.unhoverTimer = null;
+        try {
+          if (this.host.isConnected && (this.host.matches(":hover") || this.wrap.matches(":hover"))) {
+            return; // Browser confirms pointer is still hovering!
+          }
+        } catch {
+          // ignore
         }
-        this.destroy(this.pendingEarnedFade);
-      }
-    });
+        this.isHovering = false;
+        if (this.pendingDestroyOnLeave) {
+          this.pendingDestroyOnLeave = false;
+          const reason = this.pendingCloseReason ?? (this.isEarned ? "earned" : "stream_started");
+          this.pendingCloseReason = null;
+          if (this.isEarned || reason === "earned") {
+            this.callbacks.onEarned();
+          } else {
+            this.callbacks.onDismiss(reason);
+          }
+          this.destroy(this.pendingEarnedFade);
+        }
+      }, 250);
+    };
+
+    this.host.addEventListener("pointerenter", onEnter, { passive: true });
+    this.host.addEventListener("mouseenter", onEnter, { passive: true });
+    this.host.addEventListener("pointerleave", onLeave, { passive: true });
+    this.host.addEventListener("mouseleave", onLeave, { passive: true });
+
+    this.wrap.addEventListener("pointerenter", onEnter, { passive: true });
+    this.wrap.addEventListener("mouseenter", onEnter, { passive: true });
+    this.wrap.addEventListener("pointerleave", onLeave, { passive: true });
+    this.wrap.addEventListener("mouseleave", onLeave, { passive: true });
 
     this.timer.onEarned = () => {
       this.isEarned = true;
-      if (this.isHovering) {
-        // While user is hovering, keep the ad visible for entire hover duration
+      if (this.isUserHovering) {
+        // While user is hovering, keep the ad visible for entire hover duration!
         this.pendingDestroyOnLeave = true;
         this.pendingEarnedFade = true;
+        this.pendingCloseReason = "earned";
       } else {
         this.callbacks.onEarned();
         this.destroy(true);
@@ -541,6 +580,14 @@ export class AdWidget {
   }
 
   get isUserHovering(): boolean {
+    if (this.disposed) return false;
+    try {
+      if (this.host.isConnected && (this.host.matches(":hover") || this.wrap.matches(":hover"))) {
+        return true;
+      }
+    } catch {
+      // ignore
+    }
     return this.isHovering;
   }
 
@@ -669,12 +716,16 @@ export class AdWidget {
   /** Fade out and remove. If user is currently hovering, defer until pointer leave. */
   destroy(earnedFade: boolean): void {
     if (this.disposed) return;
-    if (this.isHovering) {
+    if (this.isUserHovering) {
       this.pendingDestroyOnLeave = true;
       this.pendingEarnedFade = earnedFade;
       return;
     }
     this.disposed = true;
+    if (this.unhoverTimer !== null) {
+      clearTimeout(this.unhoverTimer);
+      this.unhoverTimer = null;
+    }
     this.timer.destroy();
     this.hover.destroy();
     const remove = () => {

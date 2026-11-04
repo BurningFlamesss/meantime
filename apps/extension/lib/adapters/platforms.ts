@@ -169,7 +169,10 @@ export class GeminiAdapter extends BaseAdapter {
   readonly config = PLATFORM_CONFIGS.gemini;
 
   override getUserMessageActionSlot(latestMessageNode: HTMLElement): MountTarget {
-    const userQuery = latestMessageNode.closest<HTMLElement>("user-query") ?? latestMessageNode;
+    const userQuery =
+      latestMessageNode.closest<HTMLElement>(
+        "user-query, .user-query, .user-query-container, div[class*='user-query'], div[class*='query-container']",
+      ) ?? latestMessageNode;
     return { element: userQuery, position: "after" };
   }
 
@@ -180,8 +183,12 @@ export class GeminiAdapter extends BaseAdapter {
   }
 
   override getAiMessageFooterSlot(latestAiNode: HTMLElement): MountTarget | null {
-    const modelResponse = latestAiNode.closest<HTMLElement>("model-response") ?? latestAiNode;
-    const actions = modelResponse.querySelector<HTMLElement>("message-actions, .response-container-footer, [class*='actions']");
+    const modelResponse =
+      latestAiNode.closest<HTMLElement>("model-response, message-content, [data-test-id*='model-response']") ??
+      latestAiNode;
+    const actions = modelResponse.querySelector<HTMLElement>(
+      "message-actions, .response-container-footer, [class*='actions'], [data-test-id*='action']",
+    );
     if (actions) {
       return { element: actions, position: "after" };
     }
@@ -189,9 +196,14 @@ export class GeminiAdapter extends BaseAdapter {
   }
 
   override getAboveComposerSlot(): MountTarget | null {
-    const composerArea = this.qs<HTMLElement>(".input-area-container, .input-area, rich-textarea");
+    const composerArea = this.qs<HTMLElement>(
+      ".input-area-container, .input-area, rich-textarea, .bottom-container, form",
+    );
     if (composerArea) {
-      return { element: composerArea, position: "before" };
+      if (getComputedStyle(composerArea).position === "static") {
+        composerArea.style.position = "relative";
+      }
+      return { element: composerArea, position: "append" };
     }
     return null;
   }
@@ -203,11 +215,15 @@ export class GeminiAdapter extends BaseAdapter {
   }
 
   override findLatestUserMessage(): HTMLElement | null {
-    return this.last("user-query");
+    return this.last(
+      "user-query, .user-query, [data-test-id*='user-query'], div[class*='user-query'], .query-container, .user-query-container",
+    );
   }
 
   override findLatestAiMessage(): HTMLElement | null {
-    return this.last("model-response, pending-response, message-content");
+    return this.last(
+      "model-response, pending-response, message-content, [data-test-id*='model-response'], div[class*='model-response']",
+    );
   }
 }
 

@@ -337,8 +337,8 @@ export async function adsRoutes(app: FastifyInstance, ctx: AppContext) {
       if (c.spendDate === today && c.spentTodayMicro >= c.dailyBudgetMicro) return false;
       if (body.maxDurationSec && (c.durationSec ?? 5) > body.maxDurationSec) return false;
       if (body.platforms.length > 0) {
-        const targets = c.targetPlatforms as string[];
-        if (!targets.some((p) => body.platforms.includes(p))) return false;
+        const targets = (c.targetPlatforms as string[]) ?? [];
+        if (targets.length > 0 && !targets.some((p) => body.platforms.includes(p))) return false;
       }
       const geoTargets = (c.targetGeoClusters as string[]) ?? [];
       if (geoTargets.length > 0 && !geoTargets.includes(userCluster)) return false;

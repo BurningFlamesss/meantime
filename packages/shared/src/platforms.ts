@@ -42,14 +42,14 @@ export const PLATFORM_CONFIGS: Record<PlatformId, PlatformSelectorConfig> = {
     platformId: "gemini",
     hostPatterns: ["gemini.google.com"],
     promptInputSelector:
-      "rich-textarea [contenteditable], div.ql-editor[contenteditable='true'], rich-textarea div[contenteditable='true'], [contenteditable='true'][role='textbox'], p[data-placeholder]",
+      "rich-textarea [contenteditable], div.ql-editor[contenteditable='true'], rich-textarea div[contenteditable='true'], [contenteditable='true'][role='textbox'], p[data-placeholder], textarea[aria-label*='prompt' i], [contenteditable='true']",
     sendButtonSelector:
-      "button[aria-label*='Send' i], button.send-button, .send-button-container button, button[data-test-id*='send'], button:has(mat-icon[fonticon='send'])",
-    thinkingIndicatorSelector: ".loading-indicator, .spark-throbber, pending-response, .thinking-container",
+      "button[aria-label*='Send' i], button.send-button, .send-button-container button, button[data-test-id*='send'], button:has(mat-icon[fonticon='send']), button:has(mat-icon), button[aria-label*='Submit' i]",
+    thinkingIndicatorSelector: ".loading-indicator, .spark-throbber, pending-response, .thinking-container, [data-test-id*='thinking']",
     streamingContainerSelector: "message-content .markdown, message-content, model-response .markdown",
     generationCompleteSelector: "response-container .response-container-footer, message-actions, model-response message-actions",
-    userMessageSelector: "user-query",
-    aiMessageSelector: "model-response, pending-response",
+    userMessageSelector: "user-query, .user-query, [data-test-id*='user-query'], div[class*='user-query'], .query-container, .user-query-container",
+    aiMessageSelector: "model-response, pending-response, message-content, [data-test-id*='model-response'], div[class*='model-response']",
   },
   grok: {
     platformId: "grok",

@@ -114,10 +114,6 @@
       }
 
       /* Select & option styling - prevents white-on-white text */
-      select, option {
-        background-color: var(--field-bg) !important;
-        color: var(--field-color) !important;
-      }
       select {
         width: 100%;
         padding: 6px 9px;
@@ -125,11 +121,30 @@
         font-size: 13px;
         font-family: inherit;
         border: 1px solid var(--field-border);
+        background-color: var(--field-bg) !important;
+        color: var(--field-color) !important;
         outline: none;
         cursor: pointer;
+        color-scheme: light dark;
       }
       select:focus {
         border-color: var(--accent);
+      }
+      option {
+        background-color: var(--field-bg) !important;
+        color: var(--field-color) !important;
+      }
+      @media (prefers-color-scheme: dark) {
+        select, option {
+          background-color: #28292c !important;
+          color: #ececf1 !important;
+        }
+      }
+      @media (prefers-color-scheme: light) {
+        select, option {
+          background-color: #ffffff !important;
+          color: #111827 !important;
+        }
       }
 
       input.field {

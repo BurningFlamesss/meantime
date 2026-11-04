@@ -148,10 +148,19 @@ class MeanTimeController {
     const onSendTrigger = (e: Event) => {
       const target = e.target as Element | null;
       if (!target) return;
-      const send =
-        target.closest(this.adapter.config.sendButtonSelector) ||
-        target.closest("button.send-button, [aria-label*='Send' i], .send-button-container button, button[data-test-id*='send']");
-      if (!send) return;
+      const btn = target.closest("button, [role='button']");
+      if (!btn) return;
+      const aria = (btn.getAttribute("aria-label") ?? "").toLowerCase();
+      const isSend =
+        btn.matches(this.adapter.config.sendButtonSelector) ||
+        aria.includes("send") ||
+        aria.includes("submit") ||
+        btn.classList.contains("send-button") ||
+        btn.closest(".send-button-container") !== null ||
+        btn.querySelector("mat-icon[fonticon='send'], mat-icon:not(:empty)")?.textContent?.trim().toLowerCase() === "send" ||
+        (btn.closest("rich-textarea, .input-area-container, .bottom-container, .input-area") !== null &&
+          (aria.includes("prompt") || aria.includes("message") || btn.classList.contains("send-button")));
+      if (!isSend) return;
       void this.onPromptSubmitted("send_button");
     };
 
@@ -240,7 +249,7 @@ class MeanTimeController {
       const resolved = await this.waitForMountPoint(
         settings.placement,
         initialAiNode,
-        settings.placement === "ai_footer" ? 15_000 : 3_000,
+        settings.placement === "ai_footer" ? 15_000 : 1_500,
       );
       if (!resolved || !resolved.target) {
         console.warn("[MeanTime] Could not find mount point for placement:", settings.placement);
@@ -612,6 +621,13 @@ class MeanTimeController {
     const widget = this.activeWidget;
     const lease = this.activeLease;
     if (!widget || !lease || lease.closed) return;
+
+    // Never close or destroy while user is actively hovering over the ad
+    if (widget.isUserHovering && reason !== "dismissed" && reason !== "snoozed") {
+      widget.destroy(reason === "earned");
+      return;
+    }
+
     lease.closed = true;
     this.teardownObserver();
     this.clearWatchdogs();
@@ -636,7 +652,7 @@ class MeanTimeController {
     const hoverIntentional = widget.hover.intentional;
     const leaseToken = widget.ad.leaseToken;
 
-    widget.destroy(reason === "earned");
+    widget.destroy(reason === "earned" || earned);
     this.activeWidget = null;
     this.activeLease = null;
     this.initialAiNode = null;

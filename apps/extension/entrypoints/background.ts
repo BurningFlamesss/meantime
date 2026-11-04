@@ -80,8 +80,13 @@ class MeanTimeBackground {
         if (!identity) return null;
         if (msg.platform) await storageSet(LAST_PLATFORM_KEY, msg.platform);
         const settings = await getSettings();
-        const ad = await takeAd(Date.now(), msg.platform, settings.maxAdDurationSec);
-        void this.prefetchIfNeeded(!ad);
+        let ad = await takeAd(Date.now(), msg.platform, settings.maxAdDurationSec);
+        if (!ad) {
+          await this.prefetchForPlatform(msg.platform, settings.maxAdDurationSec, identity);
+          ad = await takeAd(Date.now(), msg.platform, settings.maxAdDurationSec);
+        } else {
+          void this.prefetchIfNeeded(false);
+        }
         return ad;
       }
       case "return_ad":
@@ -133,6 +138,33 @@ class MeanTimeBackground {
   }
 
   /* ------------------------------ prefetching ---------------------------- */
+
+  private async prefetchForPlatform(
+    platform: string | undefined,
+    maxDurationSec: number,
+    identity: Identity,
+  ): Promise<void> {
+    try {
+      const res = await apiFetch<PrefetchResponse>("/ads/prefetch", {
+        method: "POST",
+        json: {
+          deviceId: identity.deviceId,
+          count: EXTENSION_CACHE.PREFETCH_BATCH_SIZE,
+          platforms: platform ? [platform] : [],
+          maxDurationSec,
+        },
+      });
+      const pool = await getCachedAds();
+      const knownLeaseIds = new Set(pool.map((a) => a.leaseId));
+      const fresh = res.ads.filter((a) => !knownLeaseIds.has(a.leaseId));
+      if (fresh.length > 0) {
+        await setCachedAds([...pool, ...fresh]);
+      }
+      await storageSet("pacing_state", res.pacing);
+    } catch {
+      // API down or unreachable — continue with existing cache
+    }
+  }
 
   private async prefetchIfNeeded(force = false): Promise<void> {
     const identity = await storageGet<Identity | null>(STORAGE_KEYS.IDENTITY, null);
