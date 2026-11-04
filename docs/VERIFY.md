@@ -67,7 +67,7 @@ KEY=$(curl -s -X POST http://localhost:3001/tasks/presign \
 ## 4. Laya classifier
 
 Docker path (**needs Docker**, first build is a ~10 GB PyTorch CPU image and the
-first run downloads the English checkpoint):
+first run downloads the English and multilingual checkpoints, ~1.5 GB):
 
 ```bash
 docker compose up -d laya
@@ -81,28 +81,45 @@ No Docker path:
 curl -s http://127.0.0.1:8000/health
 ```
 
-Expected: `{"status":"ok","loaded":["english"],...}`. The first request after a
-cold start can take a few seconds; the API's classifier timeout is 4s, so a
-cold model fails closed to `needs_review` rather than approving anything. Warm
-ad and task inferences are ~0.2–0.6 s.
+Expected: `{"status":"ok","loaded":["english","multilingual"],...}`. The first
+request after a cold start can take a few seconds; the API's classifier timeout
+is 4s, so a cold model fails closed to `needs_review` rather than approving
+anything. Warm ad and task inferences are ~0.2–0.6 s.
 
-Both compose and `infra/laya-host.sh` set `LAYA_DEFAULT_MODEL=english`. Short
-task states (a URL plus a task type) have too little language evidence for
-Laya's detector, whose default is `multilingual`; that checkpoint is not
-preloaded here, so the first task would otherwise trigger a lazy download and
-miss the 4 s budget. Add `multilingual` to `LAYA_MODELS` and point
-`LAYA_DEFAULT_MODEL` at it if you need non-English content.
+Both compose and `infra/laya-host.sh` preload `english,multilingual` and set
+`LAYA_DEFAULT_MODEL=english`. Short task states (a URL plus a task type) have
+too little language evidence for Laya's detector, whose default is
+`multilingual`; preloading both means neither an undecided state nor the first
+non-English request pays a lazy multi-hundred-MB download that would miss the
+4 s budget. English is the fallback because it is faster.
 
-Protocol and failure-mode suite (policy-first, clamping, fail-closed, the exact
-request shape, plus real-model probes when `LAYA_ENDPOINT` is set):
+Only the English checkpoint is calibrated for these prompts. The multilingual
+checkpoint scored most clean Spanish/Chinese/Hindi/Arabic ads as fraud on a
+small labelled sample, so non-English verdicts are advisory: they reach a human
+with `non_english_review` and never auto-approve or auto-reject.
+
+Protocol, failure-mode, and real-model suite:
 
 ```bash
 pnpm build
 LAYA_ENDPOINT=http://127.0.0.1:8000 pnpm laya:check
 ```
 
-Expected with the real server: `38 passed, 0 failed, 0 skipped`; a fake
-classifier covers the failure modes, and the real probes must stay under 4 s.
+Expected with the real server: `46 passed, 0 failed, 0 skipped`; a fake
+classifier covers the failure modes, the real probes must stay under 4 s, and
+the multilingual probes run only when `/health` reports that checkpoint.
+
+Labelled decision benchmark (26 ads and task links, English plus
+Spanish/Chinese/Hindi/Arabic):
+
+```bash
+LAYA_ENDPOINT=http://127.0.0.1:8000 pnpm laya:bench
+```
+
+Expected: `0` false auto-rejects on clean/normal content, unsafe recall at or
+above `LAYA_BENCH_MIN_RECALL` (default `0.8`), and max inference under 4 s. The
+cases are in `scripts/laya-bench-cases.json` and are meant to be reviewed and
+extended; this is a small hand-written set, not a public accuracy benchmark.
 
 Offline loop: `docker compose --profile stub up -d` (or
 `node infra/laya-stub/server.mjs`) and set `LAYA_ENDPOINT=http://localhost:8080`.

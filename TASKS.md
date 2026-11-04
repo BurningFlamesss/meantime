@@ -1,6 +1,6 @@
 # MeanTime — Tasks and Roadmap
 
-**Last updated:** 2026-11-04 (real Laya + reviewer verification pass)  
+**Last updated:** 2026-11-04 (multilingual + labelled-benchmark pass)  
 **Status legend:** `[x]` done · `[~]` partial · `[ ]` not started · `[!]` blocked  
 **Priority:** P0 = required for a testable end-to-end demo · P1 = required for
 private beta · P2 = post-launch / polish
@@ -18,9 +18,10 @@ private beta · P2 = post-launch / polish
 | WXT extension | `[x]` verified | `.output/chrome-mv3` builds (189.2 KB; 94.5 KB content, 74.4 KB worker, 9.5 KB popup) and was loaded in real Chromium: first-run popup sign-up, prefetch, ad injection, 5 s payment, reload persistence, and sign-out all passed 19/19. |
 | Database migrations | `[x]` applied | `apps/api/drizzle/0000`–`0005`, 18 tables, applied to PostgreSQL 16 (compose) and 18. |
 | Demo seed | `[x]` run | 1 advertiser + 2 active campaigns inserted; re-runs are idempotent. |
-| Docker compose | `[x]` verified | The real pinned `v0.4.21` Laya image builds and runs healthy beside Postgres 16, Redis 7, and s3mock; migrations + seed apply and `pnpm smoke` passes 30/30. `LAYA_DEFAULT_MODEL=english` keeps short task states on the preloaded checkpoint. |
-| Laya moderation | `[x]` real model | Real `laya-serve` container on `:8000` with the English checkpoint. `pnpm laya:check` passes 38/38, including real probes: clean ad 82/`needs_review`, crypto scam 10/`auto_rejected`, benign task 93/`needs_review`, phishing task 7/`auto_rejected`; every inference <650 ms. |
-| Automated tests | `[~]` harnesses | No unit suite. `pnpm smoke` (30/30) and `pnpm laya:check` (38/38) run against the real API, database, and classifier. |
+| Docker compose | `[x]` verified | The real pinned `v0.4.21` Laya image builds and runs healthy beside Postgres 16, Redis 7, and s3mock; migrations + seed apply and `pnpm smoke` passes 30/30. `LAYA_MODELS=english,multilingual` preloads both checkpoints; `LAYA_DEFAULT_MODEL=english` keeps undecided short task states off a lazy download. |
+| Laya moderation | `[x]` real models | Real `laya-serve` container on `:8000` with the English **and multilingual** checkpoints. `pnpm laya:check` passes 46/46, including real probes: clean ad 82/`needs_review`, crypto scam 10/`auto_rejected`, benign task 93/`needs_review`, phishing task 7/`auto_rejected`; every inference <650 ms. Non-English verdicts are advisory (`non_english_review`). |
+| Labelled moderation benchmark | `[x]` | `pnpm laya:bench` runs 26 labelled ads/tasks in English, Spanish, Chinese, Hindi, and Arabic: 0 clean/normal auto-rejects, 11/12 fraud/phishing surfaced (92%, gate 80%), max inference <1.5 s. |
+| Automated tests | `[~]` harnesses | No unit suite. `pnpm smoke` (30/30), `pnpm laya:check` (46/46), and `pnpm laya:bench` (26 cases) run against the real API, database, and classifier. |
 | Auth/onboarding UX | `[x]` | Web sign-up/sign-in/sign-out and first-run popup onboarding work without manual storage edits. |
 
 ---
@@ -150,13 +151,22 @@ private beta · P2 = post-launch / polish
 - [x] Ran the real Laya `v0.4.21` server both from upstream source (Python
       3.13 venv, `torch==2.15.0+cpu`, `[serve]` extra) and from the pinned
       Docker image, with the English checkpoint (`convaiinnovations/laya`,
-      revision `7b928d8`, ~808 MB).
-- [x] Added `LAYA_DEFAULT_MODEL=english` to compose and `infra/laya-host.sh`:
-      short task states carry little language evidence, and Laya's
-      `multilingual` default is not preloaded, so the first task would trigger
-      a lazy checkpoint download and exceed the 4 s classifier budget.
-- [x] Verified `/health` reports `loaded: ["english"]` on CPU and that ad and
-      task inference both answer in well under the 4 s budget (<650 ms warm).
+      revision `7b928d8`, ~808 MB) and the multilingual checkpoint
+      (`convaiinnovations/laya-multilingual`, revision `1720e3e`, ~678 MB).
+- [x] Preloaded `english,multilingual` in compose and `infra/laya-host.sh` so
+      neither an undecided short task state nor detected non-English content
+      triggers a lazy checkpoint download that would exceed the 4 s budget;
+      `LAYA_DEFAULT_MODEL=english` is the faster fallback.
+- [x] Verified `/health` reports `loaded: ["english","multilingual"]` on CPU and
+      that ad, task, and non-English inference all stay well under the 4 s
+      budget (<650 ms warm, multilingual <250 ms).
+- [x] Made non-English verdicts advisory: the client reads `routing.model` and
+      forces `needs_review` with `non_english_review`, because the multilingual
+      checkpoint scored most clean Spanish/Chinese/Hindi/Arabic ads as fraud on
+      the labelled set. Policy hard-rejects still run first.
+- [x] Added `scripts/laya-bench.mjs` + `scripts/laya-bench-cases.json`
+      (`pnpm laya:bench`): 26 labelled ads and task links across five languages;
+      gates on zero clean auto-rejects, ≥80% unsafe recall, and the 4 s budget.
 - [x] Replaced the per-offence `noul` questions with one `choice` over
       legitimate/low-quality/deceptive/fraud: against the real checkpoint the
       old questions scored **every** ad as spam (~1.0), so all campaigns were
@@ -292,9 +302,9 @@ referrer sees a pending referral in `/me/referrals`.
 - [x] `pnpm db:migrate` and `pnpm db:seed` succeed against the compose
       PostgreSQL 16 instance, and `pnpm smoke` passes 30/30 against it.
 - [x] The pinned `v0.4.21` Laya container image builds (PyTorch CPU) and serves
-      the English checkpoint; `LAYA_DEFAULT_MODEL=english` avoids a lazy
-      multilingual download when a short task state carries little language
-      evidence.
+      both the English and multilingual checkpoints; preloading both avoids a
+      lazy download for undecided task states or non-English content, and
+      `pnpm laya:bench` gates the decision bands on a labelled set.
 - [x] `docs/VERIFY.md` describes how to verify each service.
 - [x] Object upload path verified end to end against s3mock: presigned PUT,
       HeadObject validation, and task submit.
@@ -476,8 +486,9 @@ separate token kind, plus a portal sign-in gate. | — | — |
 | B-13 | ~~No Docker available in the authoring environment.~~ Resolved: compose ran on a Docker-capable host (Postgres, Redis, s3mock, real Laya) and the smoke suite passed. | — | — |
 | B-14 | Referral attribution rejects same-IP signups (`ip_overlap_with_referrer`). | A referral cannot be exercised from a single client IP — by design. | Testable without weakening it: `pnpm smoke` binds a distinct loopback source address (`localAddress`), because the kernel otherwise always picks 127.0.0.1 as the source. |
 | B-15 | Laya is text-only; task screenshots are never analysed. | Task proofs always need a human (`screenshot_unverified`). | Add an image-capable classifier or a reviewer UI. |
-| B-16 | ~~Real Laya was run from source, but the container image is still unbuilt.~~ Resolved: the pinned image builds and serves the English checkpoint; the compose volume is seeded from the cached checkpoint. | — | — |
-| B-17 | The real checkpoint is poorly calibrated for yes/no moderation questions; the original `noul` set scored every ad as spam. Fixed with a `choice` category question (see §1). | Clean copy can still land in `needs_review` (e.g. copy that mentions earning money, or an advertiser with prior rejections). | Build the evaluation harness in P2 before tuning the 85/40 bands. |
+| B-16 | ~~Real Laya was run from source, but the container image is still unbuilt.~~ Resolved: the pinned image builds and serves both the English and multilingual checkpoints; the compose volume is seeded from the cached checkpoints. | — | — |
+| B-17 | The real checkpoint is poorly calibrated for yes/no moderation questions; the original `noul` set scored every ad as spam. Fixed with a `choice` category question (see §1). | Clean copy can still land in `needs_review` (e.g. copy that mentions earning money, or an advertiser with prior rejections). | Covered by `pnpm laya:bench`; tune the 85/40 bands against a larger labelled set. |
+| B-18 | The multilingual checkpoint is badly calibrated for the ad/task prompts: most clean non-English ads score as fraud. | Automatic decisions would reject legitimate non-English advertisers. | Mitigated: non-English verdicts are advisory and forced to `needs_review` (`non_english_review`). A better prompt or a language-specific calibration set is still needed before trusting them. |
 
 ---
 

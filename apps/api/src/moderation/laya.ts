@@ -55,6 +55,10 @@ interface LayaAnswer {
 
 interface LayaSystemOneResponse {
   model?: string;
+  routing?: {
+    /** Checkpoint the router chose: `english`, `multilingual`, ... */
+    model?: string;
+  };
   answers?: Record<string, LayaAnswer>;
 }
 
@@ -65,6 +69,11 @@ export interface LayaJudgement {
   severity: number;
   confidence: number;
   model: string;
+  /**
+   * Checkpoint Laya actually routed to, when the server reports it. Used to
+   * keep verdicts from an unvalidated non-English checkpoint in human review.
+   */
+  checkpoint: string | null;
 }
 
 function probabilityOf(judgement: LayaJudgement, key: string): number {
@@ -155,6 +164,7 @@ async function layaJudge(
       severity: Math.min(1, asProbability((answers.severity?.score ?? 0) / 3)),
       confidence: asProbability(primary.answer_confidence ?? primary.confidence ?? 0.5),
       model: body.model ?? "unknown",
+      checkpoint: body.routing?.model ?? null,
     };
   } catch {
     return null; // timeout / unreachable — caller falls back safely
@@ -217,6 +227,18 @@ function decide(score: number, approveAt: number): ModerationDecision {
   if (score >= approveAt) return "auto_approved";
   if (score < LAYA.AUTO_REJECT) return "auto_rejected";
   return "needs_review";
+}
+
+/**
+ * Only the English checkpoint is calibrated for these prompts. Measured on a
+ * small labelled sample, the multilingual checkpoint scored most clean Spanish,
+ * Chinese, Hindi and Arabic ads as `fraud` (several above p=0.99), so an
+ * automatic decision from it would reject legitimate advertisers. Anything the
+ * router sends elsewhere keeps a human in the loop; deterministic policy
+ * checks still hard-reject before the model is consulted.
+ */
+function needsHumanForCheckpoint(judgement: LayaJudgement): boolean {
+  return judgement.checkpoint !== null && judgement.checkpoint !== "english";
 }
 
 export interface LayaCampaignInput {
@@ -307,6 +329,14 @@ export async function moderateCampaign(
   }
 
   score = Math.max(0, Math.min(100, Math.round(score)));
+
+  // A non-English verdict is advisory only: unvalidated calibration means a
+  // model score must not approve or reject an advertiser on its own.
+  if (needsHumanForCheckpoint(laya)) {
+    reasons.push("non_english_review");
+    return { score, decision: "needs_review", reasons, layers };
+  }
+
   return { score, decision: decide(score, LAYA.AUTO_APPROVE), reasons, layers };
 }
 
@@ -366,6 +396,14 @@ export async function moderateTask(
   }
 
   score = Math.max(0, Math.min(100, Math.round(score)));
+
+  // A non-English verdict is advisory: keep it in human review even when it
+  // looks like a clear phishing link, because that checkpoint is not validated.
+  if (needsHumanForCheckpoint(laya)) {
+    reasons.push("non_english_review");
+    reasons.push("screenshot_unverified");
+    return { score, decision: "needs_review", reasons, layers };
+  }
 
   // A clearly fraudulent link is rejected without human review.
   if (score < LAYA.AUTO_REJECT) {

@@ -16,7 +16,8 @@
     "db:seed": "pnpm --filter @meantime/api db:seed",
     "db:check": "pnpm --filter @meantime/api db:check",
     "smoke": "node scripts/smoke.mjs",
-    "laya:check": "node scripts/laya-check.mjs"
+    "laya:check": "node scripts/laya-check.mjs",
+    "laya:bench": "node scripts/laya-bench.mjs"
   },
   "devDependencies": {
     "prettier": "^3.4.2",

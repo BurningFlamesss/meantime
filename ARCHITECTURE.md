@@ -359,12 +359,22 @@ than the screenshot. It can reject an obvious phishing/scam link, but a clean
 link still stops at `needs_review` with `screenshot_unverified`; there is no
 automatic approval of task proofs.
 
-The self-hosted server preloads `english` and sets `LAYA_DEFAULT_MODEL=english`.
-Laya's detector cannot identify a language from a short task state (a URL plus
-a task type) and would otherwise choose `multilingual`, which is not preloaded
-in this mostly-English deployment; the resulting lazy checkpoint download would
-exceed the client's 4 s timeout. Deployments with non-English content should
-preload `multilingual` and change the default together.
+The self-hosted server preloads `english,multilingual` and sets
+`LAYA_DEFAULT_MODEL=english`. Laya's detector cannot identify a language from a
+short task state (a URL plus a task type), and its own default is
+`multilingual`; preloading both keeps an undecided state from triggering a lazy
+multi-hundred-MB download that would exceed the client's 4 s timeout. English
+is the fallback because it is the faster checkpoint.
+
+**Non-English verdicts are advisory.** The client reads `routing.model` from
+Laya's response; when the router chose a checkpoint other than `english`, the
+score is still returned for ordering but the decision is forced to
+`needs_review` with `non_english_review`. The multilingual checkpoint is not
+calibrated for these ad/task prompts: on the labelled set in
+`scripts/laya-bench-cases.json` it scored most clean Spanish, Chinese, Hindi,
+and Arabic ads as `fraud` (several above p=0.99), so trusting it would reject
+legitimate advertisers. Deterministic policy checks still run first and remain
+authoritative.
 
 ### 5.6 Geo and privacy flow
 
@@ -758,10 +768,13 @@ These are tracked as tasks in [TASKS.md](./TASKS.md).
 
 The full stack was run on a Docker-capable host: compose brought up PostgreSQL
 16, Redis 7, s3mock, and the pinned upstream `v0.4.21` Laya image, which loaded
-the English checkpoint (`convaiinnovations/laya`, revision `7b928d8`, ~808 MB).
-The API and web server ran from the host via pnpm. `LAYA_DEFAULT_MODEL=english`
-keeps short task states on the preloaded checkpoint instead of lazily fetching
-`multilingual`; without it the first task submission exceeded the 4 s budget.
+both the English and multilingual checkpoints (`convaiinnovations/laya` revision
+`7b928d8`, ~808 MB, plus `convaiinnovations/laya-multilingual` revision
+`1720e3e`, ~678 MB). The API and web server ran from the host via pnpm.
+`LAYA_MODELS=english,multilingual` with `LAYA_DEFAULT_MODEL=english` keeps both
+undecided short task states and detected non-English content away from a lazy
+checkpoint download; without a loaded target the first request exceeded the 4 s
+budget.
 
 Verified:
 
@@ -822,13 +835,22 @@ Verified:
   compose database, and `pnpm smoke` passes 30/30 against it. A presigned `PUT`
   into s3mock is accepted, `HeadObject` validates it, and `/tasks/submit`
   records the proof.
-- Moderation against the **real English checkpoint** (`pnpm laya:check` 38/38,
-  including real-model probes): `GET /health` reports `loaded: ["english"]` on
-  CPU; clean ad copy scores 82 and lands in `needs_review`; a crypto scam scores
-  10 and is `auto_rejected`; a benign task link scores 93 and stays in
-  `needs_review` with `screenshot_unverified`; a phishing link scores 7 and is
-  `auto_rejected`. Every ad and task inference stays under 650 ms, well inside
-  the 4 s budget, and a timeout still routes to `needs_review`.
+- Moderation against the **real checkpoints** (`pnpm laya:check` 46/46,
+  including real-model probes): `GET /health` reports
+  `loaded: ["english","multilingual"]` on CPU; clean English ad copy scores 82
+  and lands in `needs_review`; a crypto scam scores 10 and is `auto_rejected`;
+  a benign task link scores 93 and stays in `needs_review` with
+  `screenshot_unverified`; a phishing link scores 7 and is `auto_rejected`.
+  Non-English probes are routed to `multilingual`, kept in `needs_review` with
+  `non_english_review`, and still carry the model's fraud/phishing reason for
+  the reviewer. Every ad and task inference stays under 650 ms, well inside the
+  4 s budget, and a timeout still routes to `needs_review`.
+- Labelled decision benchmark (`pnpm laya:bench`, 26 cases across English,
+  Spanish, Chinese, Hindi, and Arabic): zero auto-rejections of labelled clean
+  or normal content, 11 of 12 labelled fraud/phishing items rejected or flagged
+  (92%, gate 80%), and max inference under 1.5 s. The multilingual checkpoint had
+  the worse calibration — 5 of 6 clean non-English ads scored as fraud — which
+  is why non-English verdicts are advisory rather than decisive.
 - Task moderation rejects a suspicious link and leaves a clean link in
   `needs_review` with `screenshot_unverified`.
 - The end-to-end earn loop on the rebuilt API: prefetch → 5.2 s verified
@@ -842,15 +864,15 @@ Verified:
 
 Not verified:
 
-- Formal Laya accuracy/precision on a labelled benchmark. Prompt calibration
-  used a small hand-written sample of clean ads and obvious fraud.
 - A payout above the $5 threshold to a real processor (no funded account or
   processor), and referral traffic from two genuine external networks (the
   loopback source-binding test stands in for that).
 - Task-proof image *contents* are still reviewed by a human, because Laya is
   text-only.
-- The multilingual checkpoint was not downloaded; the deployment is
-  English-only and routes undecided states to the preloaded English model.
+- Multilingual **precision** at production scale. The checkpoint is loaded,
+  routed, and latency-tested, but its verdicts are not trusted for automatic
+  decisions; the 26-case labelled set is a regression gate, not a public
+  accuracy benchmark.
 
 Two bugs found during this run were fixed: BigInt money columns now serialize
 as decimal strings (the web client already types them as strings), and the

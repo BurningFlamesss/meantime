@@ -38,7 +38,7 @@ let latencyMs = 0;
 let requests = [];
 
 /** Build a Jev-shaped answer set for every question the client asked. */
-function answer(body, probabilities, severity = 0) {
+function answer(body, probabilities, severity = 0, checkpoint = null) {
   const answers = {};
   for (const [id, question] of Object.entries(body?.questions ?? {})) {
     if (question?.type === "score") {
@@ -60,7 +60,9 @@ function answer(body, probabilities, severity = 0) {
       };
     }
   }
-  return { model: "fake-laya", answers };
+  const reply = { model: "fake-laya", answers };
+  if (checkpoint) reply.routing = { model: checkpoint };
+  return reply;
 }
 
 function defaultReply(body) {
@@ -437,6 +439,64 @@ check(
   brief(outcome),
 );
 
+/* -------------------------- checkpoint provenance ----------------------- */
+/*
+ * `routing.model` is the router's actual checkpoint. Only English is
+ * calibrated for these prompts, so a verdict from any other checkpoint must
+ * not approve or reject on its own — even when its score looks decisive.
+ */
+
+reset();
+reply = (body) => ({ json: answer(body, AD_CLEAN, 0, "english") });
+outcome = await moderateCampaign(adInput(), cfg());
+check(
+  "checkpoint: an English verdict keeps the normal decision bands",
+  outcome.decision === "auto_approved" && !outcome.reasons.includes("non_english_review"),
+  brief(outcome),
+);
+
+reset();
+reply = (body) => ({ json: answer(body, AD_CLEAN, 0, "multilingual") });
+outcome = await moderateCampaign(adInput(), cfg());
+check(
+  "checkpoint: a multilingual clean ad is review-only, not auto-approved",
+  outcome.decision === "needs_review" &&
+    outcome.score === 97 &&
+    outcome.reasons.includes("non_english_review"),
+  brief(outcome),
+);
+
+reset();
+reply = (body) =>
+  ({ json: answer(body, { legitimate_ad: 0.02, low_quality: 0.01, deceptive: 0.02, fraud: 0.95 }, 0, "multilingual") });
+outcome = await moderateCampaign(adInput(), cfg());
+check(
+  "checkpoint: a multilingual fraud verdict is review-only, not auto-rejected",
+  outcome.decision === "needs_review" &&
+    outcome.reasons.includes("laya:fraud") &&
+    outcome.reasons.includes("non_english_review"),
+  brief(outcome),
+);
+
+reset();
+reply = (body) =>
+  ({
+    json: answer(
+      body,
+      { normal: 0.02, promo: 0.01, phishing: 0.95, fraud: 0.02 },
+      0,
+      "multilingual",
+    ),
+  });
+outcome = await moderateTask(taskInput(), cfg());
+check(
+  "checkpoint: a multilingual phishing link stays in review for a human",
+  outcome.decision === "needs_review" &&
+    outcome.reasons.includes("laya:phishing") &&
+    outcome.reasons.includes("non_english_review"),
+  brief(outcome),
+);
+
 /* -------------------------- protocol conformance ------------------------ */
 
 reset();
@@ -533,11 +593,59 @@ if (!real || real === ENDPOINT) {
       ),
     );
 
+    const hasMultilingual =
+      Array.isArray(health.loaded) && health.loaded.includes("multilingual");
+    let mlClean = null;
+    let mlScam = null;
+    let mlPhishTask = null;
+    if (hasMultilingual) {
+      mlClean = await probe(() =>
+        moderateCampaign(
+          adInput({
+            headline: "Envía más rápido con Acme CI",
+            bodyText:
+              "Ejecuta tus pruebas en paralelo. Empieza gratis, sin tarjeta de crédito.",
+            ctaText: "Empieza gratis",
+            targetUrl: "https://acme-ci.com/precios",
+          }),
+          realCfg,
+        ),
+      );
+      mlScam = await probe(() =>
+        moderateCampaign(
+          adInput({
+            headline: "Gana 3000 euros al día desde casa",
+            bodyText:
+              "Invierte solo 50 euros en criptomonedas y multiplica tu dinero. Garantizado.",
+            ctaText: "Reclama ahora",
+            targetUrl: "https://cripto-ganancia-express.top/invertir",
+          }),
+          realCfg,
+        ),
+      );
+      mlPhishTask = await probe(() =>
+        moderateTask(
+          taskInput({
+            postUrl: "https://anquan-yanzheng-login.top/verify",
+            taskType: "关注",
+          }),
+          realCfg,
+        ),
+      );
+    }
+
     for (const [label, p] of [
       ["clean ad", clean],
       ["crypto scam ad", scam],
       ["benign task", benignTask],
       ["phishing task", phishTask],
+      ...(hasMultilingual
+        ? [
+            ["es clean ad", mlClean],
+            ["es scam ad", mlScam],
+            ["zh phishing task", mlPhishTask],
+          ]
+        : []),
     ]) {
       console.log(`  real ${label.padEnd(16)} ${brief(p)}  ${p.ms}ms`);
     }
@@ -568,6 +676,41 @@ if (!real || real === ENDPOINT) {
       [clean, scam, benignTask, phishTask].every((p) => p.ms < 4000),
       `max=${Math.max(clean.ms, scam.ms, benignTask.ms, phishTask.ms)}ms`,
     );
+
+    if (!hasMultilingual) {
+      skip(
+        "real model: multilingual checkpoint",
+        "health.loaded has no `multilingual`; preload it with LAYA_MODELS=english,multilingual",
+      );
+    } else {
+      check(
+        "real model: clean Spanish ad is review-only, never auto-rejected",
+        mlClean.decision === "needs_review" &&
+          mlClean.reasons.includes("non_english_review") &&
+          !mlClean.reasons.includes("laya_unavailable"),
+        brief(mlClean),
+      );
+      check(
+        "real model: Spanish scam is flagged and kept out of auto-approval",
+        mlScam.decision === "needs_review" &&
+          mlScam.reasons.some((r) => r === "laya:fraud" || r === "laya:severe") &&
+          mlScam.score < mlClean.score,
+        brief(mlScam),
+      );
+      check(
+        "real model: non-English phishing task stays in human review",
+        mlPhishTask.decision === "needs_review" &&
+          (mlPhishTask.reasons.includes("laya:phishing") ||
+            mlPhishTask.reasons.includes("laya:fraud")) &&
+          mlPhishTask.reasons.includes("non_english_review"),
+        brief(mlPhishTask),
+      );
+      check(
+        "real model: multilingual inferences fit the 4s budget",
+        [mlClean, mlScam, mlPhishTask].every((p) => p.ms < 4000),
+        `max=${Math.max(mlClean.ms, mlScam.ms, mlPhishTask.ms)}ms`,
+      );
+    }
   }
 }
 

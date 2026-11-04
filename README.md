@@ -153,18 +153,36 @@ single choice with neutral option labels is what the checkpoint actually
 separates, so the client uses that shape and the offline stub mirrors it.
 
 The first `docker compose up` builds a PyTorch CPU image and the first run
-downloads the English checkpoint (~800 MB). For a fast offline loop,
-`docker compose --profile stub up -d` starts `infra/laya-stub`, a deterministic
-test double that speaks the same `/v1/systemone` protocol but is **not** a
-model; point `LAYA_ENDPOINT` at `http://localhost:8080` for that.
+downloads the English and multilingual checkpoints (~1.5 GB total). For a fast
+offline loop, `docker compose --profile stub up -d` starts `infra/laya-stub`, a
+deterministic test double that speaks the same `/v1/systemone` protocol but is
+**not** a model; point `LAYA_ENDPOINT` at `http://localhost:8080` for that.
 
-The stack preloads only English and sets `LAYA_DEFAULT_MODEL=english`. Short
-task states (a URL plus a task type) carry too little language evidence for
-Laya's detector, whose own default is `multilingual`; that checkpoint is not
-preloaded, so the first task submission would trigger a lazy multi-hundred-MB
-download and blow the API's 4 s classifier budget. For non-English content,
-add `multilingual` to `LAYA_MODELS`, point `LAYA_DEFAULT_MODEL` at it, and
-expect the first request to pay the load cost.
+The stack preloads `english,multilingual` and sets `LAYA_DEFAULT_MODEL=english`.
+Short task states (a URL plus a task type) carry too little language evidence
+for Laya's detector, whose own default is `multilingual`; preloading both means
+neither an undecided state nor the first non-English request triggers a lazy
+multi-hundred-MB download that would blow the API's 4 s classifier budget.
+English is the fallback because it is the faster checkpoint.
+
+Only the English checkpoint is calibrated for the moderation prompts here. A
+small labelled sample showed the multilingual checkpoint scoring most clean
+Spanish, Chinese, Hindi and Arabic ads as fraud, so a non-English verdict is
+**advisory only**: it is shown to the reviewer with `non_english_review` but it
+never auto-approves or auto-rejects. Deterministic policy checks still
+hard-reject before the model runs.
+
+Two suites exercise the classifier:
+
+```bash
+pnpm build
+LAYA_ENDPOINT=http://127.0.0.1:8000 pnpm laya:check   # protocol + real probes
+LAYA_ENDPOINT=http://127.0.0.1:8000 pnpm laya:bench   # 26 labelled cases
+```
+
+`laya:bench` reports false auto-rejections on clean content (must be zero) and
+recall on labelled fraud/phishing content, per language. It is a small
+hand-written set, not a public accuracy benchmark.
 
 ### Running Laya without Docker
 
@@ -176,17 +194,18 @@ package into a Python virtualenv and runs the same `laya-serve` on CPU:
 curl -s http://127.0.0.1:8000/health
 ```
 
-It requires Python >=3.10, caches the checkpoint under
+It requires Python >=3.10, caches the checkpoints under
 `~/.local/share/meantime/hf`, and takes a few minutes on first run. Override
 `LAYA_PORT`, `LAYA_DEVICE`, or `HF_HOME` through the environment; the script
-also sets `LAYA_DEFAULT_MODEL=english` for the same task-state reason as
+preloads both checkpoints and sets `LAYA_DEFAULT_MODEL=english`, matching
 compose.
 
 Laya is text-only, so social-task screenshot contents are not analysed. The
 upload itself is checked first (the object must exist, be PNG/JPEG/WebP, and be
 at most 5 MB), but a clean task link still goes to `needs_review`
-(`screenshot_unverified`) rather than being auto-approved; a scam or phishing
-link is rejected before review.
+(`screenshot_unverified`) rather than being auto-approved; an English-language
+scam or phishing link is rejected before review, and a non-English one stays in
+review with `non_english_review`.
 
 Security boundary: deterministic policy checks (blocked terms, malformed
 URLs) run *before* Laya and can hard-reject clear-cut abuse without consulting

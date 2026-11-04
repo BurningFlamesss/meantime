@@ -1,0 +1,246 @@
+{
+  "version": 1,
+  "notes": "Hand-labelled moderation probes. `clean`/`normal` content must never be auto-rejected; `fraud`/`phishing` content must be rejected or surfaced with a fraud/phishing reason. Keep each case short enough to read in review.",
+  "cases": [
+    {
+      "id": "en-ad-clean-devtools",
+      "kind": "ad",
+      "lang": "en",
+      "label": "clean",
+      "headline": "Ship faster with Acme CI",
+      "bodyText": "Run your test suite in parallel. Start free, no card required.",
+      "ctaText": "Start free",
+      "targetUrl": "https://acme-ci.com/pricing"
+    },
+    {
+      "id": "en-ad-clean-coffee",
+      "kind": "ad",
+      "lang": "en",
+      "label": "clean",
+      "headline": "Single-origin coffee, roasted weekly",
+      "bodyText": "We roast every Tuesday and ship within 24 hours. Free delivery over $25.",
+      "ctaText": "Shop beans",
+      "targetUrl": "https://greenbeanroasters.example.com/shop"
+    },
+    {
+      "id": "en-ad-clean-course",
+      "kind": "ad",
+      "lang": "en",
+      "label": "clean",
+      "headline": "Natural-light photography course",
+      "bodyText": "Eight video lessons with instructor feedback and lifetime access.",
+      "ctaText": "See the syllabus",
+      "targetUrl": "https://schoolofphoto.example.com/course"
+    },
+    {
+      "id": "es-ad-clean-devtools",
+      "kind": "ad",
+      "lang": "es",
+      "label": "clean",
+      "headline": "Envía más rápido con Acme CI",
+      "bodyText": "Ejecuta tus pruebas en paralelo. Empieza gratis, sin tarjeta de crédito.",
+      "ctaText": "Empieza gratis",
+      "targetUrl": "https://acme-ci.com/precios"
+    },
+    {
+      "id": "es-ad-clean-restaurant",
+      "kind": "ad",
+      "lang": "es",
+      "label": "clean",
+      "headline": "Reserva tu mesa en el centro",
+      "bodyText": "Cocina mediterránea de temporada. Abierto de martes a domingo.",
+      "ctaText": "Reservar",
+      "targetUrl": "https://restauranteolivo.example.com/reservas"
+    },
+    {
+      "id": "zh-ad-clean-ceramics",
+      "kind": "ad",
+      "lang": "zh",
+      "label": "clean",
+      "headline": "手工陶瓷茶具套装",
+      "bodyText": "每件器物由工作室手工拉坯并在 1280 度烧制，附带养护说明。",
+      "ctaText": "查看详情",
+      "targetUrl": "https://taocicha.example.com/shop"
+    },
+    {
+      "id": "zh-ad-clean-hiking",
+      "kind": "ad",
+      "lang": "zh",
+      "label": "clean",
+      "headline": "周末城市徒步活动报名",
+      "bodyText": "全程 12 公里，专业领队带队，含保险和午餐。",
+      "ctaText": "立即报名",
+      "targetUrl": "https://chengshi-butu.example.com/join"
+    },
+    {
+      "id": "hi-ad-clean-ceramics",
+      "kind": "ad",
+      "lang": "hi",
+      "label": "clean",
+      "headline": "हस्तनिर्मित सिरेमिक चाय सेट",
+      "bodyText": "हर बर्तन स्टूडियो में हाथ से बनाया और 1280 डिग्री पर पकाया गया है।",
+      "ctaText": "विवरण देखें",
+      "targetUrl": "https://taocicha.example.com/shop"
+    },
+    {
+      "id": "ar-ad-clean-ceramics",
+      "kind": "ad",
+      "lang": "ar",
+      "label": "clean",
+      "headline": "مجموعة أكواب شاي خزفية مصنوعة يدويًا",
+      "bodyText": "كل قطعة تُشكّل يدويًا وتُحرق في فرن بدرجة 1280، مع دليل العناية.",
+      "ctaText": "عرض التفاصيل",
+      "targetUrl": "https://taocicha.example.com/shop"
+    },
+    {
+      "id": "en-ad-fraud-crypto",
+      "kind": "ad",
+      "lang": "en",
+      "label": "fraud",
+      "headline": "Double your crypto in 24 hours",
+      "bodyText": "Send bitcoin to our wallet and get 2x back. Guaranteed returns.",
+      "ctaText": "Claim now",
+      "targetUrl": "https://crypto-doubler.xyz/claim"
+    },
+    {
+      "id": "en-ad-fraud-prize",
+      "kind": "ad",
+      "lang": "en",
+      "label": "fraud",
+      "headline": "You won a $1,000 gift card",
+      "bodyText": "Pay the $4.99 shipping fee to release your prize today.",
+      "ctaText": "Claim prize",
+      "targetUrl": "https://claim-your-prize-now.click/winner"
+    },
+    {
+      "id": "es-ad-fraud-crypto",
+      "kind": "ad",
+      "lang": "es",
+      "label": "fraud",
+      "headline": "Gana 3000 euros al día desde casa",
+      "bodyText": "Invierte solo 50 euros en criptomonedas y multiplica tu dinero. Garantizado.",
+      "ctaText": "Reclama ahora",
+      "targetUrl": "https://cripto-ganancia-express.top/invertir"
+    },
+    {
+      "id": "es-ad-fraud-bank",
+      "kind": "ad",
+      "lang": "es",
+      "label": "fraud",
+      "headline": "Su cuenta será suspendida hoy",
+      "bodyText": "Verifique sus datos bancarios para evitar el bloqueo inmediato.",
+      "ctaText": "Verificar cuenta",
+      "targetUrl": "https://banco-seguro-verificacion.top/login"
+    },
+    {
+      "id": "zh-ad-fraud-crypto",
+      "kind": "ad",
+      "lang": "zh",
+      "label": "fraud",
+      "headline": "在家每天赚三万元",
+      "bodyText": "只需投入五十元购买加密货币，保证翻倍。",
+      "ctaText": "立即领取",
+      "targetUrl": "https://kuaibi-gao-fanli.top/invest"
+    },
+    {
+      "id": "zh-ad-fraud-prize",
+      "kind": "ad",
+      "lang": "zh",
+      "label": "fraud",
+      "headline": "恭喜您获得一等奖",
+      "bodyText": "支付 29 元运费即可领取最新手机，名额有限。",
+      "ctaText": "立即领取",
+      "targetUrl": "https://zhongjiang-lingqu.top/prize"
+    },
+    {
+      "id": "ar-ad-fraud-crypto",
+      "kind": "ad",
+      "lang": "ar",
+      "label": "fraud",
+      "headline": "اربح ثلاثة آلاف دولار يوميًا من المنزل",
+      "bodyText": "استثمر خمسين دولارًا فقط في العملات الرقمية وضاعف أموالك مضمونًا.",
+      "ctaText": "اطلب الآن",
+      "targetUrl": "https://crypto-profit-fast.top/invest"
+    },
+    {
+      "id": "en-task-normal-github",
+      "kind": "task",
+      "lang": "en",
+      "label": "normal",
+      "postUrl": "https://github.com/octocat/Hello-World",
+      "taskType": "follow"
+    },
+    {
+      "id": "en-task-normal-video",
+      "kind": "task",
+      "lang": "en",
+      "label": "normal",
+      "postUrl": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+      "taskType": "like"
+    },
+    {
+      "id": "es-task-normal-github",
+      "kind": "task",
+      "lang": "es",
+      "label": "normal",
+      "postUrl": "https://github.com/octocat/Hello-World",
+      "taskType": "seguir"
+    },
+    {
+      "id": "zh-task-normal-github",
+      "kind": "task",
+      "lang": "zh",
+      "label": "normal",
+      "postUrl": "https://github.com/octocat/Hello-World",
+      "taskType": "关注"
+    },
+    {
+      "id": "hi-task-normal-github",
+      "kind": "task",
+      "lang": "hi",
+      "label": "normal",
+      "postUrl": "https://github.com/octocat/Hello-World",
+      "taskType": "फ़ॉलो करें"
+    },
+    {
+      "id": "en-task-phish-bank",
+      "kind": "task",
+      "lang": "en",
+      "label": "phishing",
+      "postUrl": "https://bankofamerica-secure-login.top/verify",
+      "taskType": "follow"
+    },
+    {
+      "id": "en-task-phish-paypal",
+      "kind": "task",
+      "lang": "en",
+      "label": "phishing",
+      "postUrl": "https://paypal-account-verification.top/login",
+      "taskType": "follow"
+    },
+    {
+      "id": "es-task-phish-bank",
+      "kind": "task",
+      "lang": "es",
+      "label": "phishing",
+      "postUrl": "https://banco-seguro-verificacion.top/login",
+      "taskType": "seguir"
+    },
+    {
+      "id": "zh-task-phish-bank",
+      "kind": "task",
+      "lang": "zh",
+      "label": "phishing",
+      "postUrl": "https://anquan-yanzheng-login.top/verify",
+      "taskType": "关注"
+    },
+    {
+      "id": "ar-task-phish-bank",
+      "kind": "task",
+      "lang": "ar",
+      "label": "phishing",
+      "postUrl": "https://bank-secure-verify.top/login",
+      "taskType": "متابعة"
+    }
+  ]
+}
