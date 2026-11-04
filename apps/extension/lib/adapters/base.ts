@@ -77,28 +77,32 @@ export abstract class BaseAdapter implements PlatformAdapter {
 
   getUserMessageActionSlot(latestMessageNode: HTMLElement): MountTarget | HTMLElement | null {
     const action = latestMessageNode.querySelector<HTMLElement>("[class*='action'], footer");
-    if (action) return { element: action, position: "after" };
-    return { element: latestMessageNode, position: "after" };
+    const target = action ?? latestMessageNode;
+    target.style.position = "relative";
+    return { element: target, position: "append" };
   }
 
   getAiMessageFooterSlot(latestAiNode: HTMLElement): MountTarget | HTMLElement | null {
     const action = latestAiNode.querySelector<HTMLElement>("[class*='action'], footer");
-    if (action) return { element: action, position: "after" };
-    return { element: latestAiNode, position: "after" };
+    const target = action ?? latestAiNode;
+    target.style.position = "relative";
+    return { element: target, position: "append" };
   }
 
   getThinkingSlot(): MountTarget | HTMLElement | null {
     const el = this.qs(this.config.thinkingIndicatorSelector);
     if (!el) return null;
-    if (el instanceof HTMLButtonElement || el.tagName === "BUTTON") {
-      return { element: el.parentElement ?? el, position: "after" };
-    }
-    return { element: el, position: "after" };
+    const target = el instanceof HTMLButtonElement || el.tagName === "BUTTON" ? (el.parentElement ?? el) : el;
+    target.style.position = "relative";
+    return { element: target, position: "append" };
   }
 
   getAboveComposerSlot(): MountTarget | HTMLElement | null {
     const portal = this.qs<HTMLElement>("[data-above-composer-portal='true']");
-    if (portal) return { element: portal, position: "append" };
+    if (portal) {
+      portal.style.position = "relative";
+      return { element: portal, position: "append" };
+    }
     const input = this.qs<HTMLElement>(this.config.promptInputSelector);
     if (!input) return null;
     const form =
@@ -107,6 +111,7 @@ export abstract class BaseAdapter implements PlatformAdapter {
       input.parentElement?.parentElement ??
       input.parentElement;
     if (!form) return null;
-    return { element: form, position: "before" };
+    form.style.position = "relative";
+    return { element: form, position: "append" };
   }
 }

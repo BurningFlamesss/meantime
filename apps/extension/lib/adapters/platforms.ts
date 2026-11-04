@@ -16,24 +16,47 @@ export class OpenAiAdapter extends BaseAdapter {
   }
 
   override getUserMessageActionSlot(latestMessageNode: HTMLElement): MountTarget {
-    // Turn container parent gives a full-width row between user prompt and assistant reply
-    const searchUnit = latestMessageNode.closest<HTMLElement>("[data-chatgpt-search-unit-key]");
-    const anchor =
-      searchUnit?.parentElement ??
-      latestMessageNode.closest<HTMLElement>(".block-BQZwFn, [data-turn-key]") ??
-      latestMessageNode;
+    const bubble = latestMessageNode.matches("[data-user-message-bubble='true']")
+      ? latestMessageNode
+      : latestMessageNode.querySelector<HTMLElement>("[data-user-message-bubble='true']") ?? latestMessageNode;
 
-    return { element: anchor, position: "after" };
+    // ChatGPT renders an action row (.flex-row-reverse or turn-action-controls) next to / under the user bubble
+    const actionRow =
+      (bubble.nextElementSibling as HTMLElement | null) ??
+      bubble.closest<HTMLElement>(".group\\/user-message, [data-content-search-unit-key], [data-chatgpt-search-unit-key]")?.querySelector<HTMLElement>(".flex-row-reverse, [class*='turn-action-controls']") ??
+      latestMessageNode.closest<HTMLElement>(".group\\/user-message")?.querySelector<HTMLElement>(".flex-row-reverse, [class*='turn-action-controls']") ??
+      latestMessageNode.querySelector<HTMLElement>(".flex-row-reverse, [class*='turn-action-controls']");
+
+    if (actionRow) {
+      actionRow.style.position = "relative";
+      actionRow.style.width = "100%";
+      actionRow.style.minHeight = "32px";
+      return { element: actionRow, position: "append" };
+    }
+
+    const turn =
+      latestMessageNode.closest<HTMLElement>("[data-content-search-unit-key], .group\\/user-message") ??
+      latestMessageNode;
+    turn.style.position = "relative";
+    return { element: turn, position: "append" };
   }
 
   override getAiMessageFooterSlot(latestAiNode: HTMLElement): MountTarget {
-    const searchUnit = latestAiNode.closest<HTMLElement>("[data-chatgpt-search-unit-key]");
-    const anchor =
-      searchUnit?.parentElement ??
-      latestAiNode.closest<HTMLElement>(".block-BQZwFn, [data-turn-key]") ??
-      latestAiNode;
+    const searchUnit =
+      latestAiNode.closest<HTMLElement>("[data-chatgpt-search-unit-key], [data-turn-key]") ?? latestAiNode;
+    const actionRow =
+      searchUnit.querySelector<HTMLElement>(".turn-action-controls, [class*='turn-action-controls']")?.parentElement ??
+      searchUnit.querySelector<HTMLElement>(".flex.items-center, [class*='actionRow']") ??
+      latestAiNode.querySelector<HTMLElement>(".turn-action-controls, [class*='turn-action-controls'], .flex.items-center");
 
-    return { element: anchor, position: "after" };
+    if (actionRow) {
+      actionRow.style.position = "relative";
+      actionRow.style.minHeight = "32px";
+      return { element: actionRow, position: "append" };
+    }
+
+    searchUnit.style.position = "relative";
+    return { element: searchUnit, position: "append" };
   }
 
   override getThinkingSlot(): MountTarget | null {
@@ -54,20 +77,31 @@ export class OpenAiAdapter extends BaseAdapter {
     const latest = matches[matches.length - 1];
     if (!latest) return null;
 
-    if (latest instanceof HTMLButtonElement || latest.tagName === "BUTTON") {
-      return { element: latest.parentElement ?? latest, position: "after" };
-    }
-    return { element: latest, position: "append" };
+    const container = latest instanceof HTMLButtonElement || latest.tagName === "BUTTON"
+      ? (latest.parentElement ?? latest)
+      : latest;
+    container.style.position = "relative";
+    return { element: container, position: "append" };
   }
 
   override getAboveComposerSlot(): MountTarget | null {
     const portal = this.qs<HTMLElement>("[data-above-composer-portal='true']");
-    if (portal) return { element: portal, position: "append" };
+    if (portal) {
+      portal.style.position = "relative";
+      return { element: portal, position: "append" };
+    }
 
     const input = this.qs<HTMLElement>(this.config.promptInputSelector);
-    const form = input?.closest("form") ?? this.qs<HTMLElement>("form[data-chatgpt-composer]");
+    const form = input?.closest<HTMLElement>("form") ?? this.qs<HTMLElement>("form[data-chatgpt-composer], form");
     if (form) {
-      return { element: form, position: "before" };
+      form.style.position = "relative";
+      return { element: form, position: "append" };
+    }
+
+    const composerArea = input?.closest<HTMLElement>(".composer-parent, [class*='composer-bar'], [data-composer-surface]") ?? input?.parentElement;
+    if (composerArea) {
+      composerArea.style.position = "relative";
+      return { element: composerArea, position: "append" };
     }
 
     return null;
@@ -79,7 +113,9 @@ export class GeminiAdapter extends BaseAdapter {
   readonly config = PLATFORM_CONFIGS.gemini;
 
   override getUserMessageActionSlot(latestMessageNode: HTMLElement): MountTarget {
-    return { element: latestMessageNode, position: "after" };
+    const action = latestMessageNode.querySelector<HTMLElement>(".query-actions, [class*='actions']") ?? latestMessageNode;
+    action.style.position = "relative";
+    return { element: action, position: "append" };
   }
 }
 
@@ -90,9 +126,13 @@ export class ClaudeAdapter extends BaseAdapter {
   override getUserMessageActionSlot(latestMessageNode: HTMLElement): MountTarget {
     for (const sel of ["[data-cds='UserMessage']", "[data-user-message-bubble]"]) {
       const bubble = latestMessageNode.closest<HTMLElement>(sel);
-      if (bubble?.parentElement) return { element: bubble.parentElement, position: "after" };
+      if (bubble?.parentElement) {
+        bubble.parentElement.style.position = "relative";
+        return { element: bubble.parentElement, position: "append" };
+      }
     }
-    return { element: latestMessageNode, position: "after" };
+    latestMessageNode.style.position = "relative";
+    return { element: latestMessageNode, position: "append" };
   }
 }
 

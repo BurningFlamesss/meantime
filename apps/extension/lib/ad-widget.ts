@@ -6,41 +6,159 @@ import { HoverTracker } from "./hover-tracker";
 import { PAUSE_UNTIL_RESTART } from "./storage";
 
 const CSS = `
-:host { all: initial; display: block; width: 100%; }
+:host {
+  all: initial;
+  display: block;
+  box-sizing: border-box;
+}
 * { box-sizing: border-box; }
+
 .mt-wrap {
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   display: flex; align-items: center; gap: 10px;
-  padding: 10px 14px; margin: 8px auto;
-  border-radius: 10px;
-  font-size: 13px; line-height: 1.45;
-  max-width: 768px;
-  width: 100%;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px; line-height: 1.4;
   box-sizing: border-box;
   isolation: isolate;
   transition: opacity .35s ease, transform .35s ease, background .2s ease, color .2s ease;
 }
-:host([data-placement="above_composer"]) .mt-wrap,
-.mt-wrap[data-placement="above_composer"] {
-  margin: 4px auto;
+
+/* ---------------- ZERO LAYOUT SHIFT PLACEMENT RULES ---------------- */
+:host([data-placement="under_prompt"]) {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 110px;
+  max-width: calc(100% - 110px);
+  z-index: 20;
+  pointer-events: auto;
+}
+:host([data-placement="under_prompt"]) .mt-wrap {
+  margin: 0;
+  width: 100%;
+  max-width: 100%;
+  height: 32px;
+  min-height: 32px;
+  padding: 2px 8px;
+  gap: 8px;
+}
+
+:host([data-placement="above_composer"]) {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 8px;
+  z-index: 40;
+  pointer-events: none;
+}
+:host([data-placement="above_composer"]) .mt-wrap {
+  margin: 0 auto;
   max-width: 768px;
   width: calc(100% - 24px);
+  pointer-events: auto;
+  padding: 8px 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
 }
-:host([data-placement="under_prompt"]) .mt-wrap,
-.mt-wrap[data-placement="under_prompt"] {
-  margin: 8px auto;
+
+:host([data-placement="ai_footer"]) {
+  position: absolute;
+  bottom: 0;
+  left: 130px;
+  right: 0;
+  max-width: calc(100% - 130px);
+  z-index: 20;
+  pointer-events: auto;
+}
+:host([data-placement="ai_footer"]) .mt-wrap {
+  margin: 0;
+  width: 100%;
+  max-width: 100%;
+  height: 32px;
+  min-height: 32px;
+  padding: 2px 8px;
+  gap: 8px;
+}
+
+:host([data-placement="thinking_indicator"]) {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 6px;
+  z-index: 25;
+  pointer-events: auto;
+}
+:host([data-placement="thinking_indicator"]) .mt-wrap {
+  margin: 0;
   max-width: 768px;
+  width: 100%;
+  padding: 6px 10px;
 }
-:host([data-placement="ai_footer"]) .mt-wrap,
-.mt-wrap[data-placement="ai_footer"] {
-  margin: 8px auto;
-  max-width: 768px;
+
+/* Compact layout for row-clipped placements (under_prompt and ai_footer) */
+:host([data-placement="under_prompt"]) .mt-main,
+:host([data-placement="ai_footer"]) .mt-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
 }
-:host([data-placement="thinking_indicator"]) .mt-wrap,
-.mt-wrap[data-placement="thinking_indicator"] {
-  margin: 8px auto;
-  max-width: 768px;
+:host([data-placement="under_prompt"]) .mt-headline,
+:host([data-placement="ai_footer"]) .mt-headline {
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+  margin: 0;
 }
+:host([data-placement="under_prompt"]) .mt-body,
+:host([data-placement="ai_footer"]) .mt-body {
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin: 0;
+  opacity: 0.85;
+  flex: 1 1 auto;
+}
+:host([data-placement="under_prompt"]) .mt-cta,
+:host([data-placement="ai_footer"]) .mt-cta {
+  padding: 3px 8px;
+  font-size: 11px;
+  line-height: 1.2;
+}
+:host([data-placement="under_prompt"]) .mt-badge,
+:host([data-placement="ai_footer"]) .mt-badge {
+  font-size: 9px;
+  padding: 2px 5px;
+  letter-spacing: .04em;
+}
+:host([data-placement="under_prompt"]) .mt-progress,
+:host([data-placement="ai_footer"]) .mt-progress {
+  width: 32px;
+  height: 4px;
+}
+:host([data-placement="under_prompt"]) .mt-menu,
+:host([data-placement="ai_footer"]) .mt-menu {
+  top: auto;
+  bottom: 100%;
+  margin-bottom: 6px;
+  margin-top: 0;
+}
+
+@media (max-width: 640px) {
+  :host([data-placement="under_prompt"]) .mt-body,
+  :host([data-placement="ai_footer"]) .mt-body {
+    display: none;
+  }
+}
+
 .mt-wrap.mt-fade { opacity: 0; transform: translateY(-4px); pointer-events: none; }
 
 .mt-badge {
@@ -62,7 +180,7 @@ const CSS = `
   transition: background .15s ease, color .15s ease;
 }
 .mt-menu {
-  position: absolute; top: 100%; right: 0; z-index: 10; margin-top: 4px;
+  position: absolute; top: 100%; right: 0; z-index: 50; margin-top: 4px;
   border-radius: 8px; padding: 4px; min-width: 172px;
 }
 .mt-menu button {
