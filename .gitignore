@@ -6,6 +6,7 @@ dist/
 .turbo/
 apps/extension/chrome-mv3
 extension-unpacked
+reference-to-take
 *.log
 .DS_Store
 .env

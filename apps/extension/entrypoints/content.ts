@@ -11,6 +11,7 @@ import type { MountTarget, PlatformAdapter } from "../lib/adapters/base";
 import { AdWidget } from "../lib/ad-widget";
 import { PohiCollector } from "../lib/pohi";
 import {
+  getCachedSettings,
   getSettings,
   PAUSE_UNTIL_RESTART,
   pauseState,
@@ -196,50 +197,52 @@ class MeanTimeController {
   private async onPromptSubmitted(source: TriggerSource): Promise<void> {
     if (this.inFlight || this.activeWidget) return; // one ad at a time
     console.info(`[MeanTime] Prompt detected (${source})`);
-    // Snapshot both anchors synchronously, before any await: a fast model can
-    // render a new answer while settings/storage is still being read, and a
-    // baseline captured afterwards would treat that answer as pre-existing.
+
+    const settings = getCachedSettings();
+    if (pauseState(settings).paused) {
+      console.info("[MeanTime] Ads paused in settings");
+      return;
+    }
+
+    // Snapshot anchors and PoHI synchronously at the submit turn
     const initialUserNode = this.adapter.findLatestUserMessage();
     this.preSubmitUserMsgKey = this.adapter.getMessageKey(initialUserNode);
     const initialAiNode = this.adapter.findLatestAiMessage();
-    this.inFlight = true;
-    try {
-      const settings = await getSettings();
-      if (pauseState(settings).paused) {
-        console.info("[MeanTime] Ads paused in settings");
-        return;
-      }
 
-      // Layer-4 pacing, enforced client-side against the local counter; the
-      // server re-checks authoritatively at prefetch/telemetry time.
-      if (!(await this.pacingAllows())) {
+    const snap = this.pohi.snapshot(false);
+    const pohiAtSubmit = {
+      inputInteractionScore: snap.inputInteractionScore,
+      keystrokeCount: snap.keystrokeCount,
+      trustedPasteSeen: snap.trustedPasteSeen,
+    };
+
+    this.inFlight = true;
+
+    // Immediately kick off ad prefetch and pacing check in parallel with DOM resolution
+    const adPromise = chrome.runtime
+      .sendMessage({ type: "take_ad", platform: this.adapter.platformId })
+      .catch(() => null);
+    const pacingPromise = this.pacingAllows();
+
+    try {
+      const allowed = await pacingPromise;
+      if (!allowed) {
         console.info("[MeanTime] Pacing threshold reached");
         return;
       }
 
-      // Wait briefly for the target mount point to render.
-      const viewport = performance.now();
+      // Fast mount resolution via MutationObserver (zero-latency DOM attachment)
       const mountPoint = await this.waitForMountPoint(
         settings.placement,
         initialAiNode,
-        2_500,
-        viewport,
+        3_000,
       );
       if (!mountPoint) {
         console.warn("[MeanTime] Could not find mount point for placement:", settings.placement);
         return;
       }
 
-      const snap = this.pohi.snapshot(false);
-      const pohiAtSubmit = {
-        inputInteractionScore: snap.inputInteractionScore,
-        keystrokeCount: snap.keystrokeCount,
-        trustedPasteSeen: snap.trustedPasteSeen,
-      };
-
-      const ad = await chrome.runtime
-        .sendMessage({ type: "take_ad", platform: this.adapter.platformId })
-        .catch(() => null);
+      const ad = await adPromise;
       if (!ad) {
         console.warn("[MeanTime] No ad available (cache empty, cooldown, or signed out)");
         return;
@@ -302,55 +305,87 @@ class MeanTimeController {
   }
 
   /**
-   * Resolve the placement with a short poll.
+   * Resolve the placement with a MutationObserver for zero-delay DOM detection.
    * - "above_composer": ready immediately above the prompt box.
    * - "under_prompt": waits for the newly sent user bubble (keyed via getMessageKey).
    * - "thinking_indicator": waits for model reasoning / thinking block.
    * - "ai_footer": waits for the new AI message node.
    * Falls back safely to above the composer or under prompt (NEVER inside the prompt box).
    */
-  private async waitForMountPoint(
+  private waitForMountPoint(
     placement: Placement,
     initialAiNode: HTMLElement | null,
     timeoutMs: number,
-    startedAt: number,
   ): Promise<MountTarget | HTMLElement | null> {
     // 1. "above_composer" is ready immediately (no waiting for response)
     if (placement === "above_composer") {
       const slot = this.adapter.getAboveComposerSlot();
-      if (slot) return slot;
+      if (slot) return Promise.resolve(slot);
     }
 
-    // 2. Poll for the specific placement target until timeout
-    const deadline = startedAt + timeoutMs;
-    while (performance.now() < deadline) {
-      if (placement === "under_prompt") {
-        const latest = this.adapter.findLatestUserMessage();
-        const key = this.adapter.getMessageKey(latest);
-        const isNew = this.preSubmitUserMsgKey === null ? latest !== null : key !== this.preSubmitUserMsgKey;
-        if (isNew && latest) {
-          const slot = this.adapter.getUserMessageActionSlot(latest);
-          if (slot) return slot;
-        }
-      } else if (placement === "thinking_indicator") {
-        const thinking = this.adapter.getThinkingSlot();
-        if (thinking) {
-          return thinking;
-        }
-      } else if (placement === "ai_footer") {
-        const latestAi = this.adapter.findLatestAiMessage();
-        const isNewAi = initialAiNode === null ? latestAi !== null : latestAi !== null && latestAi !== initialAiNode;
-        if (isNewAi && latestAi) {
-          const slot = this.adapter.getAiMessageFooterSlot(latestAi);
-          if (slot) return slot;
-        }
-      }
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+    return new Promise<MountTarget | HTMLElement | null>((resolve) => {
+      let resolved = false;
+      let observer: MutationObserver | null = null;
+      let timeoutTimer: number | null = null;
 
-    // 3. Fallback resolution if specific target did not appear in time
-    console.warn(`[MeanTime] Target for "${placement}" not found in ${timeoutMs}ms; using safe fallback`);
-    return this.fallbackMount(placement);
+      const finish = (target: MountTarget | HTMLElement | null) => {
+        if (resolved) return;
+        resolved = true;
+        observer?.disconnect();
+        observer = null;
+        if (timeoutTimer !== null) {
+          clearTimeout(timeoutTimer);
+          timeoutTimer = null;
+        }
+        resolve(target);
+      };
+
+      const checkNow = () => {
+        if (placement === "under_prompt") {
+          const latest = this.adapter.findLatestUserMessage();
+          const key = this.adapter.getMessageKey(latest);
+          const isNew = this.preSubmitUserMsgKey === null ? latest !== null : key !== this.preSubmitUserMsgKey;
+          if (isNew && latest) {
+            const slot = this.adapter.getUserMessageActionSlot(latest);
+            if (slot) {
+              finish(slot);
+              return true;
+            }
+          }
+        } else if (placement === "thinking_indicator") {
+          const thinking = this.adapter.getThinkingSlot();
+          if (thinking) {
+            finish(thinking);
+            return true;
+          }
+        } else if (placement === "ai_footer") {
+          const latestAi = this.adapter.findLatestAiMessage();
+          const isNewAi = initialAiNode === null ? latestAi !== null : latestAi !== null && latestAi !== initialAiNode;
+          if (isNewAi && latestAi) {
+            const slot = this.adapter.getAiMessageFooterSlot(latestAi);
+            if (slot) {
+              finish(slot);
+              return true;
+            }
+          }
+        }
+        return false;
+      };
+
+      // Check immediately (in case the node rendered synchronously)
+      if (checkNow()) return;
+
+      // Observe DOM mutations to react the exact microtask React commits the new message
+      observer = new MutationObserver(() => {
+        checkNow();
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+
+      timeoutTimer = window.setTimeout(() => {
+        console.warn(`[MeanTime] Target for "${placement}" not found in ${timeoutMs}ms; using safe fallback`);
+        finish(this.fallbackMount(placement));
+      }, timeoutMs);
+    });
   }
 
   private fallbackMount(requestedPlacement?: Placement): MountTarget | HTMLElement | null {
@@ -438,9 +473,25 @@ class MeanTimeController {
     if (!root) return;
 
     const completeSelector = this.adapter.config.generationCompleteSelector;
+    let stopSeen = false;
 
     const check = () => {
       if (!this.activeWidget || this.activeLease?.closed) return;
+
+      // Track stop button lifecycle (Stop button appears while generating and disappears when done)
+      const stopBtn = document.querySelector(
+        "button[aria-label*='Stop' i], button[data-testid='stop-button']",
+      );
+      if (stopBtn) {
+        stopSeen = true;
+      } else if (stopSeen) {
+        this.teardownObserver();
+        if (this.activeLease?.displayMode === "wait_time_only" && this.activeWidget) {
+          this.finalize("stream_started");
+        }
+        return;
+      }
+
       const latest = this.adapter.findLatestAiMessage();
       const isNew = this.initialAiNode === null ? latest !== null : latest !== null && latest !== this.initialAiNode;
       if (!isNew || !latest) return;

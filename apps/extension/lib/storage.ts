@@ -108,8 +108,28 @@ export async function storageSet(key: string, value: unknown): Promise<void> {
   await chrome.storage.local.set({ [key]: value });
 }
 
+let cachedSettings: ExtensionSettings = DEFAULT_SETTINGS;
+
+if (typeof chrome !== "undefined" && chrome.storage?.local) {
+  void storageGet(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS).then((s) => {
+    cachedSettings = s;
+  });
+  chrome.storage.onChanged.addListener((changes, area) => {
+    const change = changes[STORAGE_KEYS.SETTINGS];
+    if (area === "local" && change?.newValue) {
+      cachedSettings = change.newValue as ExtensionSettings;
+    }
+  });
+}
+
+export function getCachedSettings(): ExtensionSettings {
+  return cachedSettings;
+}
+
 export async function getSettings(): Promise<ExtensionSettings> {
-  return storageGet(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS);
+  const current = await storageGet(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS);
+  cachedSettings = current;
+  return current;
 }
 
 export async function saveSettings(patch: Partial<ExtensionSettings>): Promise<void> {
