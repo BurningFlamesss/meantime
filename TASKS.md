@@ -52,8 +52,9 @@ private beta · P2 = post-launch / polish
 - [x] Cumulative viewport timer (IntersectionObserver + visibility + focus).
 - [x] Configurable campaign duration (2s–15s, default 5s) with duration-based CPI pricing ($0.002/sec minimum bid).
 - [x] User maximum ad duration preference (2s–15s, default 15s) in extension popup and web dashboard (`/dashboard` via `/me/settings`).
-- [x] Hover retention for ads: ad never disappears prematurely while user is hovering over it, even when view timer is earned; disappears on mouse leave only if earned, without dismissing early on brief pre-completion hover.
-- [x] Zero-layout-shift widget placements across 4 slots: `above_composer` (absolute float), `under_prompt` (clipped to action controls row), `thinking_indicator` (docked to active thinking indicator, never on completed thought button), and `ai_footer` (docked to AI response action row).
+- [x] Hover retention and countdown pausing: ad dismissal countdown pauses immediately when hovered, stays visible for the entire duration of hover interaction, and resumes remaining countdown on pointer leave without restarting; transitions between internal ad elements are ignored.
+- [x] Standardized zero-layout-shift ad placements: `above_composer` (matching `under_prompt` dimensions at 42px height, 5px 12px padding, 8px radius), `under_prompt` (expanded dimensions with stacked headline + body hierarchy preventing text clipping), `thinking_indicator` (anchored after user turn above reasoning/streamed response), and `ai_footer` (inline-flex inside response action controls row avoiding prose overlap).
+- [x] Streamlined ad visual hierarchy: removed debugging "AD · MEANTIME" badge, progress bar, and earned badge; clean presentation showing sponsor headline, secondary body text, CTA button, and pause/dismiss controls.
 - [x] Strict `wait_time_only` mode closing immediately on the first streamed AI reply token via thread-level container observing and 50ms polling loop.
 - [x] Intentional hover tracking (500 ms gate).
 - [x] PoHI keystroke/paste counters (no prompt text).

@@ -41,7 +41,7 @@ export class OpenAiAdapter extends BaseAdapter {
         actionRow.style.position = "relative";
       }
       actionRow.style.width = "100%";
-      actionRow.style.minHeight = "32px";
+      actionRow.style.minHeight = "44px";
       return { element: actionRow, position: "append" };
     }
 
@@ -60,24 +60,42 @@ export class OpenAiAdapter extends BaseAdapter {
         "[data-turn-key], [data-content-search-turn-key], [data-chatgpt-search-unit-key], .group, .block-BQZwFn, article",
       ) ?? latestAiNode.parentElement ?? latestAiNode;
 
-    // Search for any button in the action row
-    const btn = turn.querySelector<HTMLElement>(
+    // Find the action buttons that are OUTSIDE the markdown/prose content
+    const allBtns = turn.querySelectorAll<HTMLElement>(
       "button[aria-label*='Copy' i], button[aria-label*='Read aloud' i], button[aria-label*='Share' i], button[aria-label*='Try again' i], button[aria-label*='Regenerate' i], button[aria-label*='Good' i], button[aria-label*='Bad' i], button[aria-label*='More' i]",
     );
 
-    if (btn) {
-      // Find the exact flex row containing the buttons (e.g. .turn-action-controls)
-      const flexRow =
-        btn.closest<HTMLElement>("[class*='turn-action-controls'], .turn-action-controls") ??
-        btn.parentElement;
+    for (let i = allBtns.length - 1; i >= 0; i--) {
+      const btn = allBtns[i];
+      if (!btn) continue;
+      // Skip buttons that are inside the response prose/markdown
+      if (btn.closest(".markdown, [data-markdown-text-style], .text-size-chat, [class*='prose']")) continue;
 
-      if (flexRow) {
+      // Find the flex row containing this action button
+      let flexRow = btn.closest<HTMLElement>("[class*='turn-action-controls'], .turn-action-controls");
+      if (!flexRow) {
+        let parent = btn.parentElement;
+        while (parent && parent !== turn) {
+          if (parent.closest(".markdown, [data-markdown-text-style], .text-size-chat, [class*='prose']")) {
+            parent = null;
+            break;
+          }
+          if (parent.querySelectorAll("button").length >= 2) {
+            flexRow = parent;
+            break;
+          }
+          parent = parent.parentElement;
+        }
+      }
+
+      if (flexRow && !flexRow.closest(".markdown, [data-markdown-text-style], .text-size-chat, [class*='prose']")) {
         return { element: flexRow, position: "append" };
       }
     }
 
+    // Fallback: look for the action controls container directly
     const controls = turn.querySelector<HTMLElement>("[class*='turn-action-controls'], .turn-action-controls");
-    if (controls) {
+    if (controls && !controls.closest(".markdown, [data-markdown-text-style], .text-size-chat, [class*='prose']")) {
       return { element: controls, position: "append" };
     }
 
@@ -159,6 +177,37 @@ export class GeminiAdapter extends BaseAdapter {
     const user = this.findLatestUserMessage();
     if (user) return this.getUserMessageActionSlot(user);
     return null;
+  }
+
+  override getAiMessageFooterSlot(latestAiNode: HTMLElement): MountTarget | null {
+    const modelResponse = latestAiNode.closest<HTMLElement>("model-response") ?? latestAiNode;
+    const actions = modelResponse.querySelector<HTMLElement>("message-actions, .response-container-footer, [class*='actions']");
+    if (actions) {
+      return { element: actions, position: "after" };
+    }
+    return { element: modelResponse, position: "after" };
+  }
+
+  override getAboveComposerSlot(): MountTarget | null {
+    const composerArea = this.qs<HTMLElement>(".input-area-container, .input-area, rich-textarea");
+    if (composerArea) {
+      return { element: composerArea, position: "before" };
+    }
+    return null;
+  }
+
+  override getMessageKey(node: HTMLElement | null): string | HTMLElement | null {
+    if (!node) return null;
+    const text = node.textContent?.trim().slice(0, 40);
+    return node.getAttribute("id") ?? (text ? `g_${text}` : node);
+  }
+
+  override findLatestUserMessage(): HTMLElement | null {
+    return this.last("user-query");
+  }
+
+  override findLatestAiMessage(): HTMLElement | null {
+    return this.last("model-response, pending-response, message-content");
   }
 }
 

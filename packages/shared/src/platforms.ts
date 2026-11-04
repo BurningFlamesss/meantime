@@ -41,13 +41,15 @@ export const PLATFORM_CONFIGS: Record<PlatformId, PlatformSelectorConfig> = {
   gemini: {
     platformId: "gemini",
     hostPatterns: ["gemini.google.com"],
-    promptInputSelector: "div.ql-editor[contenteditable='true'], rich-textarea div[contenteditable='true']",
-    sendButtonSelector: "button.send-button, button[aria-label='Send message']",
-    thinkingIndicatorSelector: ".loading-indicator, .spark-throbber",
-    streamingContainerSelector: "message-content .markdown",
-    generationCompleteSelector: "response-container .response-container-footer",
+    promptInputSelector:
+      "rich-textarea [contenteditable], div.ql-editor[contenteditable='true'], rich-textarea div[contenteditable='true'], [contenteditable='true'][role='textbox'], p[data-placeholder]",
+    sendButtonSelector:
+      "button[aria-label*='Send' i], button.send-button, .send-button-container button, button[data-test-id*='send'], button:has(mat-icon[fonticon='send'])",
+    thinkingIndicatorSelector: ".loading-indicator, .spark-throbber, pending-response, .thinking-container",
+    streamingContainerSelector: "message-content .markdown, message-content, model-response .markdown",
+    generationCompleteSelector: "response-container .response-container-footer, message-actions, model-response message-actions",
     userMessageSelector: "user-query",
-    aiMessageSelector: "model-response",
+    aiMessageSelector: "model-response, pending-response",
   },
   grok: {
     platformId: "grok",

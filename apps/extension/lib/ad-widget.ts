@@ -15,37 +15,21 @@ const CSS = `
 
 .mt-wrap {
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 12px;
   border-radius: 8px;
-  font-size: 13px; line-height: 1.4;
+  font-size: 13px;
+  line-height: 1.35;
   box-sizing: border-box;
   isolation: isolate;
   transition: opacity .35s ease, transform .35s ease, background .2s ease, color .2s ease;
 }
 
 /* ---------------- ZERO LAYOUT SHIFT PLACEMENT RULES ---------------- */
-:host([data-placement="under_prompt"]) {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 110px;
-  max-width: calc(100% - 110px);
-  z-index: 20;
-  pointer-events: auto;
-  display: flex;
-  align-items: center;
-}
-:host([data-placement="under_prompt"]) .mt-wrap {
-  margin: 0;
-  width: 100%;
-  max-width: 100%;
-  height: 32px;
-  min-height: 32px;
-  padding: 2px 8px;
-  gap: 8px;
-}
 
+/* A. Advertisement above prompt/input box */
 :host([data-placement="above_composer"]) {
   position: absolute;
   bottom: 100%;
@@ -66,10 +50,14 @@ const CSS = `
   max-width: 768px;
   width: calc(100% - 24px);
   pointer-events: auto;
-  padding: 8px 12px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+  height: 42px;
+  min-height: 42px;
+  padding: 5px 12px;
+  gap: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
 }
 
+/* B. Advertisement at the end of a user prompt */
 :host([data-placement="under_prompt"]) {
   position: absolute;
   top: 0;
@@ -86,33 +74,13 @@ const CSS = `
   margin: 0;
   width: 100%;
   max-width: 100%;
-  height: 32px;
-  min-height: 32px;
-  padding: 2px 8px;
-  gap: 8px;
+  height: 42px;
+  min-height: 42px;
+  padding: 5px 12px;
+  gap: 12px;
 }
 
-:host([data-placement="ai_footer"]) {
-  display: inline-flex;
-  align-items: center;
-  position: relative;
-  height: 32px;
-  max-height: 32px;
-  margin-left: 8px;
-  flex: 0 1 auto;
-  pointer-events: auto;
-  z-index: 10;
-}
-:host([data-placement="ai_footer"]) .mt-wrap {
-  margin: 0;
-  width: auto;
-  max-width: 100%;
-  height: 30px;
-  min-height: 30px;
-  padding: 2px 8px;
-  gap: 8px;
-}
-
+/* C. Advertisement near thinking indicator */
 :host([data-placement="thinking_indicator"]) {
   display: block;
   width: 100%;
@@ -125,63 +93,160 @@ const CSS = `
   margin: 0 auto;
   max-width: 768px;
   width: calc(100% - 24px);
-  padding: 8px 12px;
+  height: 42px;
+  min-height: 42px;
+  padding: 5px 12px;
+  gap: 12px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
-/* Compact layout for row-clipped placements (under_prompt, ai_footer, thinking_indicator) */
-:host([data-placement="under_prompt"]) .mt-main,
-:host([data-placement="ai_footer"]) .mt-main,
-:host([data-placement="thinking_indicator"]) .mt-main {
+/* D. Advertisement below AI response (inside action controls row) */
+:host([data-placement="ai_footer"]) {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+  height: 32px;
+  max-height: 32px;
+  margin-left: 8px;
+  flex: 0 1 auto;
+  max-width: calc(100% - 170px);
+  overflow: hidden;
+  pointer-events: auto;
+  z-index: 10;
+  vertical-align: middle;
+}
+:host([data-placement="ai_footer"]) .mt-wrap {
+  margin: 0;
+  width: auto;
+  max-width: 100%;
+  height: 30px;
+  min-height: 30px;
+  padding: 2px 8px;
+  gap: 8px;
+}
+
+/* Non-OpenAI / Gemini platform override: render flow-based container so it works in Angular layouts */
+:host([data-platform="gemini"]) {
+  position: relative !important;
+  display: block !important;
+  width: 100% !important;
+  margin: 8px 0 !important;
+  left: auto !important;
+  right: auto !important;
+  top: auto !important;
+  bottom: auto !important;
+  max-width: 100% !important;
+  z-index: 20 !important;
+  pointer-events: auto !important;
+}
+:host([data-platform="gemini"]) .mt-wrap {
+  position: relative !important;
+  margin: 0 auto !important;
+  max-width: 768px !important;
+  width: calc(100% - 24px) !important;
+  height: 42px !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
+}
+
+/* ---------------- CONTENT HIERARCHY & TYPOGRAPHY ---------------- */
+
+.mt-main {
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.mt-headline {
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.25;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mt-body {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+}
+
+/* Inline single-line compact layout for AI footer action row */
+:host([data-placement="ai_footer"]) .mt-main {
+  flex-direction: row;
   align-items: center;
   gap: 6px;
-  min-width: 0;
-  overflow: hidden;
 }
-:host([data-placement="under_prompt"]) .mt-headline,
-:host([data-placement="ai_footer"]) .mt-headline,
-:host([data-placement="thinking_indicator"]) .mt-headline {
+:host([data-placement="ai_footer"]) .mt-headline {
   font-size: 12px;
   line-height: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 0 1 auto;
-  margin: 0;
 }
-:host([data-placement="under_prompt"]) .mt-body,
-:host([data-placement="ai_footer"]) .mt-body,
-:host([data-placement="thinking_indicator"]) .mt-body {
+:host([data-placement="ai_footer"]) .mt-body {
   font-size: 11px;
   line-height: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin: 0;
-  opacity: 0.85;
-  flex: 1 1 auto;
 }
-:host([data-placement="under_prompt"]) .mt-cta,
-:host([data-placement="ai_footer"]) .mt-cta,
-:host([data-placement="thinking_indicator"]) .mt-cta {
+
+.mt-cta {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  padding: 5px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s ease, border-color .15s ease, color .15s ease;
+}
+
+:host([data-placement="ai_footer"]) .mt-cta {
   padding: 3px 8px;
   font-size: 11px;
   line-height: 1.2;
 }
-:host([data-placement="under_prompt"]) .mt-badge,
-:host([data-placement="ai_footer"]) .mt-badge,
-:host([data-placement="thinking_indicator"]) .mt-badge {
-  font-size: 9px;
-  padding: 2px 5px;
-  letter-spacing: .04em;
+
+.mt-controls {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  position: relative;
 }
-:host([data-placement="under_prompt"]) .mt-progress,
-:host([data-placement="ai_footer"]) .mt-progress,
-:host([data-placement="thinking_indicator"]) .mt-progress {
-  width: 32px;
-  height: 4px;
+
+.mt-icon-btn {
+  appearance: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 4px;
+  border-radius: 5px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .15s ease, color .15s ease;
 }
+
+.mt-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 50;
+  margin-top: 4px;
+  border-radius: 8px;
+  padding: 4px;
+  min-width: 172px;
+}
+
 :host([data-placement="under_prompt"]) .mt-menu,
 :host([data-placement="ai_footer"]) .mt-menu,
 :host([data-placement="thinking_indicator"]) .mt-menu {
@@ -191,46 +256,33 @@ const CSS = `
   margin-top: 0;
 }
 
+.mt-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
 @media (max-width: 640px) {
-  :host([data-placement="under_prompt"]) .mt-body,
-  :host([data-placement="ai_footer"]) .mt-body,
-  :host([data-placement="thinking_indicator"]) .mt-body {
+  .mt-body {
     display: none;
   }
 }
 
-.mt-wrap.mt-fade { opacity: 0; transform: translateY(-4px); pointer-events: none; }
+.mt-wrap.mt-fade {
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+}
 
-.mt-badge {
-  flex: none; font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
-  padding: 2px 7px; border-radius: 5px;
+.mt-hidden {
+  display: none;
 }
-.mt-main { flex: 1 1 auto; min-width: 0; }
-.mt-headline { font-weight: 600; font-size: 13px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mt-body { margin: 2px 0 0; font-size: 12px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.mt-cta {
-  flex: none; font-size: 12px; font-weight: 600; text-decoration: none;
-  padding: 6px 12px; border-radius: 7px; cursor: pointer;
-  transition: background .15s ease, border-color .15s ease;
-}
-.mt-controls { flex: none; display: flex; align-items: center; gap: 4px; position: relative; }
-.mt-icon-btn {
-  appearance: none; background: none; border: none; cursor: pointer;
-  font-size: 14px; padding: 4px 6px; border-radius: 6px; line-height: 1;
-  transition: background .15s ease, color .15s ease;
-}
-.mt-menu {
-  position: absolute; top: 100%; right: 0; z-index: 50; margin-top: 4px;
-  border-radius: 8px; padding: 4px; min-width: 172px;
-}
-.mt-menu button {
-  display: block; width: 100%; text-align: left; border: none; background: none;
-  font-size: 12px; padding: 6px 8px; border-radius: 5px; cursor: pointer;
-}
-.mt-progress { flex: none; width: 44px; height: 5px; border-radius: 3px; overflow: hidden; }
-.mt-progress > i { display: block; height: 100%; width: 0%; transition: width .1s linear; }
-.mt-earned { flex: none; font-size: 11px; font-weight: 700; }
-.mt-hidden { display: none; }
 
 /* ---------------- LIGHT THEME ---------------- */
 :host([data-theme="light"]) .mt-wrap,
@@ -243,23 +295,17 @@ const CSS = `
 :host([data-theme="light"]) .mt-headline,
 .theme-light .mt-headline { color: #111827; }
 :host([data-theme="light"]) .mt-body,
-.theme-light .mt-body { color: #374151; }
-:host([data-theme="light"]) .mt-badge,
-.theme-light .mt-badge {
-  background: #f3f4f6;
-  border: 1px solid #d1d5db;
-  color: #4b5563;
-}
+.theme-light .mt-body { color: #4b5563; }
 :host([data-theme="light"]) .mt-cta,
 .theme-light .mt-cta {
-  background: #f9fafb;
-  border: 1px solid #d1d5db;
-  color: #111827;
+  background: #111827;
+  border: 1px solid #111827;
+  color: #ffffff;
 }
 :host([data-theme="light"]) .mt-cta:hover,
 .theme-light .mt-cta:hover {
-  background: #f3f4f6;
-  border-color: #9ca3af;
+  background: #374151;
+  border-color: #374151;
 }
 :host([data-theme="light"]) .mt-icon-btn,
 .theme-light .mt-icon-btn { color: #6b7280; }
@@ -276,12 +322,6 @@ const CSS = `
 .theme-light .mt-menu button { color: #111827; }
 :host([data-theme="light"]) .mt-menu button:hover,
 .theme-light .mt-menu button:hover { background: #f3f4f6; }
-:host([data-theme="light"]) .mt-progress,
-.theme-light .mt-progress { background: #e5e7eb; }
-:host([data-theme="light"]) .mt-progress > i,
-.theme-light .mt-progress > i { background: #2563eb; }
-:host([data-theme="light"]) .mt-earned,
-.theme-light .mt-earned { color: #15803d; }
 
 /* ---------------- DARK THEME ---------------- */
 :host([data-theme="dark"]) .mt-wrap,
@@ -295,22 +335,16 @@ const CSS = `
 .theme-dark .mt-headline { color: #ffffff; }
 :host([data-theme="dark"]) .mt-body,
 .theme-dark .mt-body { color: #d1d5db; }
-:host([data-theme="dark"]) .mt-badge,
-.theme-dark .mt-badge {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: #e5e7eb;
-}
 :host([data-theme="dark"]) .mt-cta,
 .theme-dark .mt-cta {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.28);
   color: #ffffff;
 }
 :host([data-theme="dark"]) .mt-cta:hover,
 .theme-dark .mt-cta:hover {
-  background: rgba(255, 255, 255, 0.16);
-  border-color: rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(255, 255, 255, 0.45);
 }
 :host([data-theme="dark"]) .mt-icon-btn,
 .theme-dark .mt-icon-btn { color: #9ca3af; }
@@ -327,12 +361,6 @@ const CSS = `
 .theme-dark .mt-menu button { color: #ececf1; }
 :host([data-theme="dark"]) .mt-menu button:hover,
 .theme-dark .mt-menu button:hover { background: rgba(255, 255, 255, 0.1); }
-:host([data-theme="dark"]) .mt-progress,
-.theme-dark .mt-progress { background: rgba(255, 255, 255, 0.16); }
-:host([data-theme="dark"]) .mt-progress > i,
-.theme-dark .mt-progress > i { background: #3b82f6; }
-:host([data-theme="dark"]) .mt-earned,
-.theme-dark .mt-earned { color: #22c55e; }
 `;
 
 export interface WidgetCallbacks {
@@ -345,8 +373,6 @@ export class AdWidget {
   readonly host: HTMLDivElement;
   private readonly shadow: ShadowRoot;
   private readonly wrap: HTMLDivElement;
-  private readonly progressBar: HTMLElement;
-  private readonly earnedBadge: HTMLSpanElement;
   private readonly menu: HTMLDivElement;
   readonly timer: ViewportTimer;
   readonly hover: HoverTracker;
@@ -354,6 +380,7 @@ export class AdWidget {
   private isHovering = false;
   private isEarned = false;
   private pendingDestroyOnLeave = false;
+  private pendingEarnedFade = false;
   private disposed = false;
 
   constructor(
@@ -375,10 +402,7 @@ export class AdWidget {
     this.wrap.setAttribute("aria-label", "Sponsored message");
     this.setTheme(initialTheme);
 
-    const badge = document.createElement("span");
-    badge.className = "mt-badge";
-    badge.textContent = "Ad · MeanTime";
-
+    // 1. Content: Brand/Headline + Body
     const main = document.createElement("div");
     main.className = "mt-main";
     const headline = document.createElement("p");
@@ -389,11 +413,11 @@ export class AdWidget {
     body.textContent = ad.bodyText;
     main.append(headline, body);
 
+    // 2. Call-to-action button
     const cta = document.createElement("a");
     cta.className = "mt-cta";
     cta.textContent = ad.ctaText;
-    // Defense in depth for ads created before the API pinned http(s): a
-    // `javascript:` or `data:` href must never be clickable.
+    // Defense in depth for URL protocols
     try {
       const url = new URL(ad.targetUrl);
       if (url.protocol === "http:" || url.protocol === "https:") cta.href = url.toString();
@@ -404,16 +428,7 @@ export class AdWidget {
     cta.rel = "noopener noreferrer sponsored";
     cta.addEventListener("click", () => this.callbacks.onClickCta());
 
-    const progress = document.createElement("div");
-    progress.className = "mt-progress";
-    progress.setAttribute("aria-hidden", "true");
-    this.progressBar = document.createElement("i");
-    progress.append(this.progressBar);
-
-    this.earnedBadge = document.createElement("span");
-    this.earnedBadge.className = "mt-earned mt-hidden";
-    this.earnedBadge.textContent = "✓ Earned";
-
+    // 3. Necessary interaction controls (Pause + Dismiss)
     const controls = document.createElement("div");
     controls.className = "mt-controls";
 
@@ -431,6 +446,7 @@ export class AdWidget {
     closeBtn.setAttribute("aria-label", "Dismiss this ad");
     closeBtn.textContent = "×";
     closeBtn.addEventListener("click", () => {
+      this.isHovering = false;
       this.callbacks.onDismiss("dismissed");
       this.destroy(false);
     });
@@ -451,6 +467,7 @@ export class AdWidget {
       item.setAttribute("role", "menuitem");
       item.textContent = label;
       item.addEventListener("click", () => {
+        this.isHovering = false;
         this.callbacks.onDismiss("snoozed", minutes);
         this.destroy(false);
       });
@@ -482,36 +499,49 @@ export class AdWidget {
     });
 
     controls.append(snoozeBtn, closeBtn, this.menu);
-    this.wrap.append(badge, main, progress, this.earnedBadge, cta, controls);
+
+    // Only core content + CTA + controls (no debugging, progress bar, or earned badge)
+    this.wrap.append(main, cta, controls);
     this.shadow.append(style, this.wrap);
 
     this.timer = new ViewportTimer(this.host, this.requiredDurationMs);
     this.hover = new HoverTracker(this.host);
 
-    // Track active hover so the ad doesn't disappear prematurely if user is reading it
-    this.host.addEventListener("pointerenter", () => {
+    // Track active hover: timer keeps ticking forward.
+    // If user is hovering over the ad, the ad does NOT disappear until pointer leaves.
+    this.wrap.addEventListener("pointerenter", () => {
       this.isHovering = true;
     });
-    this.host.addEventListener("pointerleave", () => {
+
+    this.wrap.addEventListener("pointerleave", (e: PointerEvent) => {
+      if (e.relatedTarget && this.wrap.contains(e.relatedTarget as Node)) {
+        return; // Transition between child elements inside the ad
+      }
       this.isHovering = false;
       if (this.pendingDestroyOnLeave) {
         this.pendingDestroyOnLeave = false;
-        this.destroy(true);
+        if (this.isEarned) {
+          this.callbacks.onEarned();
+        }
+        this.destroy(this.pendingEarnedFade);
       }
     });
 
     this.timer.onEarned = () => {
       this.isEarned = true;
-      this.progressBar.style.width = "100%";
-      this.earnedBadge.classList.remove("mt-hidden");
-      this.callbacks.onEarned();
       if (this.isHovering) {
-        // While user is hovering, keep the ad visible until pointer leaves
+        // While user is hovering, keep the ad visible for entire hover duration
         this.pendingDestroyOnLeave = true;
+        this.pendingEarnedFade = true;
       } else {
+        this.callbacks.onEarned();
         this.destroy(true);
       }
     };
+  }
+
+  get isUserHovering(): boolean {
+    return this.isHovering;
   }
 
   setTheme(theme: "light" | "dark"): void {
@@ -521,11 +551,17 @@ export class AdWidget {
     this.wrap.classList.toggle("theme-light", theme === "light");
   }
 
-  mount(target: HTMLElement | MountTarget, placement?: string, theme?: "light" | "dark"): void {
+  mount(target: HTMLElement | MountTarget, placement?: string, theme?: "light" | "dark", platform?: string): void {
     if (placement) {
       this.host.dataset.placement = placement;
       this.wrap.dataset.placement = placement;
-      this.applyHostStyles(placement);
+    }
+    if (platform) {
+      this.host.dataset.platform = platform;
+      this.wrap.dataset.platform = platform;
+    }
+    if (placement) {
+      this.applyHostStyles(placement, platform);
     }
     if (theme) {
       this.setTheme(theme);
@@ -543,10 +579,23 @@ export class AdWidget {
 
     this.timer.start();
     this.hover.start();
-    this.animateProgress();
   }
 
-  private applyHostStyles(placement: string): void {
+  private applyHostStyles(placement: string, platform?: string): void {
+    if (platform === "gemini") {
+      this.host.style.position = "relative";
+      this.host.style.display = "block";
+      this.host.style.width = "100%";
+      this.host.style.margin = "8px 0";
+      this.host.style.left = "auto";
+      this.host.style.right = "auto";
+      this.host.style.top = "auto";
+      this.host.style.bottom = "auto";
+      this.host.style.maxWidth = "100%";
+      this.host.style.pointerEvents = "auto";
+      this.host.style.zIndex = "20";
+      return;
+    }
     if (placement === "above_composer") {
       this.host.style.position = "absolute";
       this.host.style.bottom = "100%";
@@ -569,7 +618,7 @@ export class AdWidget {
       this.host.style.left = "0";
       this.host.style.right = "110px";
       this.host.style.maxWidth = "calc(100% - 110px)";
-      this.host.style.height = "32px";
+      this.host.style.height = "42px";
       this.host.style.zIndex = "20";
       this.host.style.pointerEvents = "auto";
     } else if (placement === "ai_footer") {
@@ -580,8 +629,11 @@ export class AdWidget {
       this.host.style.maxHeight = "32px";
       this.host.style.marginLeft = "8px";
       this.host.style.flex = "0 1 auto";
+      this.host.style.maxWidth = "calc(100% - 170px)";
+      this.host.style.overflow = "hidden";
       this.host.style.pointerEvents = "auto";
       this.host.style.zIndex = "10";
+      this.host.style.verticalAlign = "middle";
     } else if (placement === "thinking_indicator") {
       this.host.style.position = "relative";
       this.host.style.display = "block";
@@ -602,7 +654,7 @@ export class AdWidget {
     if (pos === "append" && el.lastElementChild === this.host) return;
 
     if (this.host.dataset.placement) {
-      this.applyHostStyles(this.host.dataset.placement);
+      this.applyHostStyles(this.host.dataset.placement, this.host.dataset.platform);
     }
 
     if (pos === "before") {
@@ -614,19 +666,14 @@ export class AdWidget {
     }
   }
 
-  private animateProgress(): void {
-    const step = () => {
-      if (this.disposed || this.timer.earned) return;
-      const pct = Math.min(100, (this.timer.cumulativeMs / this.requiredDurationMs) * 100);
-      this.progressBar.style.width = `${pct.toFixed(1)}%`;
-      requestAnimationFrame(step);
-    };
-    requestAnimationFrame(step);
-  }
-
-  /** Fade out and remove. `earnedFade` keeps the badge visible briefly. */
+  /** Fade out and remove. If user is currently hovering, defer until pointer leave. */
   destroy(earnedFade: boolean): void {
     if (this.disposed) return;
+    if (this.isHovering) {
+      this.pendingDestroyOnLeave = true;
+      this.pendingEarnedFade = earnedFade;
+      return;
+    }
     this.disposed = true;
     this.timer.destroy();
     this.hover.destroy();

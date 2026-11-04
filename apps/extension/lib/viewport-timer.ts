@@ -13,6 +13,7 @@ export class ViewportTimer {
   private inViewport = false;
   private pageVisible = true;
   private windowFocused = true;
+  private isHoverPaused = false;
 
   private observer: IntersectionObserver | null = null;
   private rafHandle: number | null = null;
@@ -47,6 +48,31 @@ export class ViewportTimer {
     this.tick();
   }
 
+  pause(): void {
+    if (this.isHoverPaused) return;
+    const now = performance.now();
+    if (this.lastTick !== null && this.activelyViewable) {
+      this.accumulatedMs += now - this.lastTick;
+    }
+    this.lastTick = null;
+    this.isHoverPaused = true;
+    if (this.rafHandle !== null) {
+      cancelAnimationFrame(this.rafHandle);
+      this.rafHandle = null;
+    }
+  }
+
+  resume(): void {
+    if (!this.isHoverPaused) return;
+    this.isHoverPaused = false;
+    this.lastTick = this.activelyViewable ? performance.now() : null;
+    this.tick();
+  }
+
+  get isPaused(): boolean {
+    return this.isHoverPaused;
+  }
+
   private onVisibility = () => {
     this.pageVisible = document.visibilityState === "visible";
     this.tick();
@@ -61,7 +87,7 @@ export class ViewportTimer {
   };
 
   private get activelyViewable(): boolean {
-    return this.inViewport && this.pageVisible && this.windowFocused;
+    return this.inViewport && this.pageVisible && this.windowFocused && !this.isHoverPaused;
   }
 
   private tick = () => {

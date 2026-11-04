@@ -137,24 +137,26 @@ class MeanTimeController {
           target instanceof HTMLElement &&
           ((input && (target === input || input.contains(target))) ||
             target.matches(this.adapter.config.promptInputSelector) ||
-            target.closest(this.adapter.config.promptInputSelector) !== null);
+            target.closest(this.adapter.config.promptInputSelector) !== null ||
+            (target.isContentEditable && target.closest("rich-textarea, .input-area, [contenteditable='true'], form, main") !== null));
         if (!isFromInput) return;
         void this.onPromptSubmitted("enter_key");
       },
       { capture: true, passive: true },
     );
 
-    document.addEventListener(
-      "pointerdown",
-      (e: Event) => {
-        const target = e.target as Element | null;
-        if (!target) return;
-        const send = target.closest(this.adapter.config.sendButtonSelector);
-        if (!send) return;
-        void this.onPromptSubmitted("send_button");
-      },
-      { capture: true, passive: true },
-    );
+    const onSendTrigger = (e: Event) => {
+      const target = e.target as Element | null;
+      if (!target) return;
+      const send =
+        target.closest(this.adapter.config.sendButtonSelector) ||
+        target.closest("button.send-button, [aria-label*='Send' i], .send-button-container button, button[data-test-id*='send']");
+      if (!send) return;
+      void this.onPromptSubmitted("send_button");
+    };
+
+    document.addEventListener("pointerdown", onSendTrigger, { capture: true, passive: true });
+    document.addEventListener("click", onSendTrigger, { capture: true, passive: true });
   }
 
   private currentInput(): HTMLElement | null {
@@ -286,7 +288,7 @@ class MeanTimeController {
       );
 
       try {
-        widget.mount(mountPoint, actualPlacement, resolvedTheme);
+        widget.mount(mountPoint, actualPlacement, resolvedTheme, this.adapter.platformId);
         console.info(
           "[MeanTime] Ad mounted successfully:",
           ad.headline,
@@ -482,7 +484,18 @@ class MeanTimeController {
     // If the host is removed by the site (route change, re-render), settle the
     // impression instead of holding the "one ad at a time" lock forever.
     this.connectionTimer = window.setInterval(() => {
-      if (this.activeWidget && !widget.host.isConnected) this.finalize("navigated");
+      if (this.activeWidget && !widget.host.isConnected) {
+        // Attempt reanchor before concluding the tab navigated (e.g. Gemini Angular turn replacement)
+        const user = this.adapter.findLatestUserMessage();
+        if (user) {
+          const slot = this.adapter.getUserMessageActionSlot(user);
+          if (slot) {
+            widget.reanchor(slot);
+            if (widget.host.isConnected) return;
+          }
+        }
+        this.finalize("navigated");
+      }
     }, 1_000);
   }
 

@@ -5,111 +5,380 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>MeanTime</title>
     <style>
-      :root { color-scheme: light dark; }
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --text: #111827;
+        --sub: #6b7280;
+        --border: rgba(127, 127, 127, 0.25);
+        --field-bg: #f9fafb;
+        --field-color: #111827;
+        --field-border: rgba(127, 127, 127, 0.35);
+        --accent: #2e9e5b;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #202123;
+          --text: #ececf1;
+          --sub: #9ca3af;
+          --border: rgba(255, 255, 255, 0.16);
+          --field-bg: #28292c;
+          --field-color: #ececf1;
+          --field-border: rgba(255, 255, 255, 0.25);
+        }
+      }
+
       * { box-sizing: border-box; }
       body {
-        width: 340px; margin: 0; padding: 16px;
-        font-family: ui-sans-serif, system-ui, sans-serif; font-size: 13px;
+        width: 340px;
+        margin: 0;
+        padding: 14px 16px;
+        font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+        font-size: 13px;
+        background: var(--bg);
+        color: var(--text);
       }
-      h1 { font-size: 15px; margin: 0 0 2px; }
-      .sub { opacity: .65; margin: 0 0 14px; }
-      .auth-lead { opacity: .75; line-height: 1.45; margin: 0 0 12px; }
-      fieldset { border: 1px solid rgba(127,127,127,.3); border-radius: 8px; margin: 0 0 12px; padding: 10px 12px; }
-      legend { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; opacity: .6; padding: 0 4px; }
-      label.mode { display: block; margin-bottom: 10px; cursor: pointer; }
-      label.mode:last-child { margin-bottom: 0; }
-      .mode-title { font-weight: 600; display: flex; align-items: center; gap: 6px; }
-      .mode-desc { margin: 3px 0 0 20px; opacity: .75; line-height: 1.45; }
-      .mode-desc.warn { color: #c98a00; }
-      select, button.action, input.field {
-        width: 100%; padding: 7px 9px; border-radius: 7px; font-size: 13px;
-        border: 1px solid rgba(127,127,127,.4); background: transparent; color: inherit;
+
+      /* 1. BRAND HEADER */
+      .brand-header {
+        margin-bottom: 12px;
       }
-      input.field { margin-bottom: 10px; }
-      .field-label { display: block; font-size: 11px; opacity: .65; margin: 0 0 4px; }
-      button.action { cursor: pointer; margin-top: 8px; font-weight: 600; }
-      button.action:hover { background: rgba(127,127,127,.12); }
-      button.link {
-        display: block; width: 100%; background: none; border: none;
-        color: inherit; opacity: .65; text-decoration: underline;
-        cursor: pointer; padding: 8px 0 0; font-size: 12px;
+      .brand-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
       }
-      button.link:hover { opacity: 1; }
-      .links { margin-top: 10px; border-top: 1px solid rgba(127,127,127,.2); padding-top: 2px; }
-      .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-      .account { border-bottom: 1px solid rgba(127,127,127,.2); padding-bottom: 8px; }
-      .account-email { font-weight: 600; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .stats { display: flex; gap: 8px; }
-      .stat { flex: 1; text-align: center; border: 1px solid rgba(127,127,127,.25); border-radius: 8px; padding: 8px 4px; }
-      .stat b { display: block; font-size: 16px; }
-      .stat span { font-size: 10px; opacity: .6; text-transform: uppercase; letter-spacing: .05em; }
-      .toggle { position: relative; width: 36px; height: 20px; }
-      .toggle input { opacity: 0; width: 100%; height: 100%; position: absolute; margin: 0; cursor: pointer; }
-      .toggle i { position: absolute; inset: 0; border-radius: 10px; background: rgba(127,127,127,.4); transition: background .15s; pointer-events: none; }
-      .toggle i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left .15s; }
-      .toggle input:checked + i { background: #2e9e5b; }
-      .toggle input:checked + i::after { left: 18px; }
+      .brand-logo {
+        width: 28px;
+        height: 28px;
+        border-radius: 7px;
+        background: #111827;
+        color: #ffffff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 15px;
+        flex: none;
+      }
+      @media (prefers-color-scheme: dark) {
+        .brand-logo {
+          background: #343541;
+          color: #ffffff;
+          border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+      }
+      h1 {
+        font-size: 15px;
+        font-weight: 700;
+        margin: 0;
+        line-height: 1.2;
+      }
+      .sub {
+        font-size: 11px;
+        color: var(--sub);
+        margin: 2px 0 0;
+        line-height: 1.35;
+      }
+      .account {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 6px 0 10px;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 12px;
+        font-size: 12px;
+      }
+      .account-email {
+        font-weight: 600;
+        max-width: 210px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      /* 2. QUICK CONTROLS */
+      fieldset {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        margin: 0 0 10px;
+        padding: 8px 12px 10px;
+      }
+      legend {
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: .05em;
+        color: var(--sub);
+        padding: 0 4px;
+      }
+
+      /* Select & option styling - prevents white-on-white text */
+      select, option {
+        background-color: var(--field-bg) !important;
+        color: var(--field-color) !important;
+      }
+      select {
+        width: 100%;
+        padding: 6px 9px;
+        border-radius: 7px;
+        font-size: 13px;
+        font-family: inherit;
+        border: 1px solid var(--field-border);
+        outline: none;
+        cursor: pointer;
+      }
+      select:focus {
+        border-color: var(--accent);
+      }
+
+      input.field {
+        width: 100%;
+        padding: 7px 9px;
+        border-radius: 7px;
+        font-size: 13px;
+        font-family: inherit;
+        border: 1px solid var(--field-border);
+        background: var(--field-bg);
+        color: var(--field-color);
+        margin-bottom: 8px;
+      }
+      .field-label {
+        display: block;
+        font-size: 11px;
+        color: var(--sub);
+        margin: 0 0 3px;
+      }
+
+      label.mode {
+        display: block;
+        margin-bottom: 8px;
+        cursor: pointer;
+      }
+      label.mode:last-child {
+        margin-bottom: 0;
+      }
+      .mode-title {
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .mode-desc {
+        margin: 2px 0 0 20px;
+        color: var(--sub);
+        font-size: 11px;
+        line-height: 1.35;
+      }
+      .mode-desc.warn {
+        color: #d97706;
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .toggle {
+        position: relative;
+        width: 36px;
+        height: 20px;
+      }
+      .toggle input {
+        opacity: 0;
+        width: 100%;
+        height: 100%;
+        position: absolute;
+        margin: 0;
+        cursor: pointer;
+      }
+      .toggle i {
+        position: absolute;
+        inset: 0;
+        border-radius: 10px;
+        background: rgba(127, 127, 127, 0.4);
+        transition: background .15s;
+        pointer-events: none;
+      }
+      .toggle i::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #ffffff;
+        transition: left .15s;
+      }
+      .toggle input:checked + i {
+        background: #2e9e5b;
+      }
+      .toggle input:checked + i::after {
+        left: 18px;
+      }
+
       #pause-banner {
-        display: flex; align-items: center; gap: 10px;
-        border: 1px solid rgba(201,138,0,.55); border-radius: 8px;
-        padding: 9px 10px; margin: 0 0 12px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        border: 1px solid rgba(217, 119, 6, 0.4);
+        border-radius: 7px;
+        padding: 7px 9px;
+        margin: 8px 0;
+        background: rgba(217, 119, 6, 0.08);
       }
-      #pause-banner b { display: block; color: #c98a00; font-size: 12px; }
-      #pause-banner p { margin: 2px 0 0; font-size: 11px; opacity: .75; line-height: 1.4; }
-      #pause-banner button.action { width: auto; flex: none; margin: 0; padding: 5px 9px; font-size: 12px; }
-      .intro { border: 1px solid rgba(127,127,127,.35); border-radius: 10px; padding: 12px; margin: 0 0 14px; }
-      .intro h2 { font-size: 13px; margin: 0 0 8px; }
-      .intro ul { margin: 0; padding-left: 16px; line-height: 1.5; }
-      .intro li { margin-bottom: 6px; }
-      .intro-perms { font-size: 11px; opacity: .7; line-height: 1.45; margin: 8px 0 0; }
-      .intro button.action { margin-top: 10px; }
-      .error { color: #c0392b; font-size: 12px; margin: 8px 0 0; line-height: 1.4; }
-      .auth-hint { font-size: 11px; opacity: .55; margin: 0 0 8px; }
-      .server { margin-top: 12px; font-size: 12px; }
-      .server summary { cursor: pointer; opacity: .6; }
-      .server input { margin-top: 8px; }
-      .server-note { font-size: 11px; opacity: .6; margin: 6px 0 0; min-height: 13px; }
+      #pause-banner b {
+        display: block;
+        color: #d97706;
+        font-size: 12px;
+      }
+      #pause-banner p {
+        margin: 1px 0 0;
+        font-size: 11px;
+        color: var(--sub);
+        line-height: 1.3;
+      }
+
+      /* Buttons */
+      button.action {
+        width: 100%;
+        padding: 7px 10px;
+        border-radius: 7px;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        border: 1px solid var(--field-border);
+        background: var(--field-bg);
+        color: var(--field-color);
+        transition: background .15s ease, opacity .15s ease;
+      }
+      button.action:hover {
+        opacity: .85;
+      }
+      button.primary-btn {
+        background: #111827;
+        color: #ffffff;
+        border-color: #111827;
+      }
+      @media (prefers-color-scheme: dark) {
+        button.primary-btn {
+          background: #ffffff;
+          color: #111827;
+          border-color: #ffffff;
+        }
+      }
+
+      button.link {
+        display: block;
+        width: 100%;
+        background: none;
+        border: none;
+        color: var(--sub);
+        text-decoration: underline;
+        cursor: pointer;
+        padding: 4px 0;
+        font-size: 11px;
+        text-align: center;
+      }
+      button.link:hover {
+        color: var(--text);
+      }
+      button.link-btn {
+        background: none;
+        border: none;
+        color: var(--sub);
+        text-decoration: underline;
+        cursor: pointer;
+        font-size: 12px;
+        padding: 0;
+      }
+      button.link-btn:hover {
+        color: var(--text);
+      }
+
+      /* 3. STATS & FOOTER */
+      .stats {
+        display: flex;
+        gap: 8px;
+        margin: 12px 0 8px;
+      }
+      .stat {
+        flex: 1;
+        text-align: center;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 8px 4px;
+        background: var(--field-bg);
+      }
+      .stat b {
+        display: block;
+        font-size: 15px;
+        color: var(--text);
+      }
+      .stat span {
+        font-size: 9px;
+        color: var(--sub);
+        text-transform: uppercase;
+        letter-spacing: .05em;
+      }
+
+      .links {
+        margin-top: 10px;
+        border-top: 1px solid var(--border);
+        padding-top: 6px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 2px 8px;
+      }
+
+      .intro {
+        border: 1px solid var(--border);
+        border-radius: 9px;
+        padding: 10px 12px;
+        margin: 0 0 12px;
+      }
+      .intro h2 { font-size: 13px; margin: 0 0 6px; }
+      .intro ul { margin: 0; padding-left: 16px; line-height: 1.45; font-size: 12px; }
+      .intro li { margin-bottom: 4px; }
+      .intro-perms { font-size: 10px; color: var(--sub); line-height: 1.35; margin: 6px 0 0; }
+      .error { color: #dc2626; font-size: 12px; margin: 6px 0 0; line-height: 1.35; }
+      .auth-hint { font-size: 11px; color: var(--sub); margin: 0 0 6px; }
+      .server { margin-top: 10px; font-size: 11px; }
+      .server summary { cursor: pointer; color: var(--sub); }
+      .server-note { font-size: 11px; color: var(--sub); margin: 4px 0 0; }
+
       [hidden] { display: none !important; }
     </style>
   </head>
   <body>
-    <h1>MeanTime</h1>
-    <p class="sub">Micro-ads during AI wait time. You keep 55%.</p>
+    <!-- 1. BRAND -->
+    <header class="brand-header">
+      <div class="brand-row">
+        <div class="brand-logo">m</div>
+        <div class="brand-info">
+          <h1>MeanTime</h1>
+          <p class="sub">Micro-ads during AI wait time. You keep 55%.</p>
+        </div>
+      </div>
+    </header>
 
     <section id="intro-view" class="intro" aria-labelledby="intro-title" hidden>
       <h2 id="intro-title">How MeanTime works</h2>
       <ul>
-        <li>
-          <b>A small, labelled text ad</b> appears under your prompt while the
-          AI answers. It never covers the page — keep typing, scrolling, and
-          clicking as usual.
-        </li>
-        <li>
-          <b>5 seconds of real view time</b> earns the view. The timer runs only
-          while the ad is on screen, the tab is visible, and the window is
-          focused; switch away and it pauses.
-        </li>
-        <li>
-          <b>You keep 55%</b> of what the advertiser pays, credited per verified
-          view.
-        </li>
-        <li>
-          <b>Your prompts stay private.</b> MeanTime never reads, stores, or
-          sends what you type.
-        </li>
+        <li><b>Small, labelled text ad</b> appears under your prompt while AI generates.</li>
+        <li><b>View time</b> earns the payout (55% revenue share).</li>
+        <li><b>Your prompts stay private.</b> Prompt text is never read or stored.</li>
       </ul>
-      <p class="intro-perms">
-        Permissions: <b>storage</b> keeps your session, settings, and cached ads;
-        <b>alarms</b> syncs earnings; <b>idle</b> prefetches while you are away.
-        On AI sites it reads page structure only, to place the ad.
-      </p>
-      <button id="intro-dismiss" class="action" type="button">Got it</button>
+      <p class="intro-perms">Permissions: storage, alarms, idle. Content script reads DOM placement only.</p>
+      <button id="intro-dismiss" class="action" type="button" style="margin-top: 8px;">Got it</button>
     </section>
 
+    <!-- AUTH VIEW (when not signed in) -->
     <section id="auth-view">
-      <p class="auth-lead">
-        Sign in to start earning. Ads appear only after you send an AI prompt,
-        and you can pause them at any time.
+      <p style="color: var(--sub); font-size: 12px; line-height: 1.4; margin: 0 0 10px;">
+        Sign in to earn. Ads appear during AI wait time and you can pause anytime.
       </p>
       <form id="auth-form">
         <label class="field-label" for="auth-email">Email</label>
@@ -118,76 +387,59 @@
         <input id="auth-password" class="field" type="password" autocomplete="current-password" required />
         <p id="auth-hint" class="auth-hint">At least 10 characters.</p>
         <p id="auth-error" class="error" role="alert" hidden></p>
-        <button id="auth-submit" class="action" type="submit">Sign in</button>
+        <button id="auth-submit" class="action primary-btn" type="submit">Sign in</button>
         <button id="auth-toggle" class="link" type="button">New here? Create an account</button>
       </form>
 
       <details class="server">
-        <summary>Server</summary>
-        <label class="field-label" for="api-base">API URL</label>
+        <summary>Server settings</summary>
+        <label class="field-label" for="api-base" style="margin-top: 6px;">API URL</label>
         <input id="api-base" class="field" type="url" placeholder="http://localhost:3001" />
         <button id="save-server" class="action" type="button">Save server</button>
         <p id="server-note" class="server-note"></p>
       </details>
     </section>
 
+    <!-- SIGNED-IN APP VIEW -->
     <div id="app-view" hidden>
-      <div class="row account">
+      <!-- Account Info -->
+      <div class="account">
         <span id="account-email" class="account-email"></span>
-        <button id="sign-out" class="link" type="button">Sign out</button>
+        <button id="sign-out" class="link-btn" type="button">Sign out</button>
       </div>
 
-      <div class="row">
-        <span><b>Ads enabled</b></span>
-        <span class="toggle"><input type="checkbox" id="enabled" /><i></i></span>
-      </div>
-      <div id="pause-banner" role="status" hidden>
-        <div>
-          <b>Ads paused</b>
-          <p id="pause-detail"></p>
-        </div>
-        <button id="pause-resume" class="action" type="button">Resume</button>
-      </div>
+      <!-- 2. QUICK CONTROLS: Theme, Preferred Ad Time, Ad Position, Mode, Pause Setting -->
 
+      <!-- Control 1: Theme -->
       <fieldset>
-        <legend>Pause ads</legend>
-        <select id="pause-duration">
-          <option value="5">5 minutes</option>
-          <option value="10">10 minutes</option>
-          <option value="15">15 minutes</option>
-          <option value="60">1 hour</option>
-          <option value="restart">Until the browser restarts</option>
-          <option value="indefinite">Until I turn ads back on</option>
+        <legend>Theme</legend>
+        <select id="theme">
+          <option value="auto">Auto (match website)</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
         </select>
-        <button class="action" id="pause-apply" type="button">Pause ads</button>
       </fieldset>
 
+      <!-- Control 2: Preferred (max) ad time -->
       <fieldset>
-        <legend>Display mode</legend>
-        <label class="mode">
-          <span class="mode-title">
-            <input type="radio" name="displayMode" value="wait_time_only" />
-            Strict Wait-Time Only
-          </span>
-          <p class="mode-desc warn">
-            The ad disappears the instant the AI starts streaming. ⚠ If the AI
-            responds in under 5 seconds, the ad closes early and will not reach
-            the 5-second payout threshold.
-          </p>
-        </label>
-        <label class="mode">
-          <span class="mode-title">
-            <input type="radio" name="displayMode" value="persist_until_5s" />
-            Guaranteed 5s Persistence
-          </span>
-          <p class="mode-desc">
-            Recommended for earnings. If the AI answers faster than 5 seconds,
-            the ad stays anchored under your message until the 5-second view
-            timer completes, shows "✓ Earned", and fades out.
-          </p>
-        </label>
+        <legend>Preferred ad time: <span id="max-duration-label">15s</span></legend>
+        <input
+          type="range"
+          id="max-duration"
+          min="2"
+          max="15"
+          step="1"
+          value="15"
+          style="width: 100%; margin: 4px 0;"
+        />
+        <div style="display: flex; justify-content: space-between; font-size: 10px; color: var(--sub);">
+          <span>2s (quick)</span>
+          <span>5s (standard)</span>
+          <span>15s (max earnings)</span>
+        </div>
       </fieldset>
 
+      <!-- Control 3: Ad position -->
       <fieldset>
         <legend>Ad position</legend>
         <select id="placement">
@@ -198,51 +450,81 @@
         </select>
       </fieldset>
 
+      <!-- Control 4: Mode -->
       <fieldset>
-        <legend>Maximum ad duration: <span id="max-duration-label">15s</span></legend>
-        <input
-          type="range"
-          id="max-duration"
-          min="2"
-          max="15"
-          step="1"
-          value="15"
-          style="width: 100%; margin: 6px 0;"
-        />
-        <div style="display: flex; justify-content: space-between; font-size: 10px; opacity: 0.7;">
-          <span>2s (quick)</span>
-          <span>5s (standard)</span>
-          <span>15s (max earnings)</span>
+        <legend>Mode</legend>
+        <label class="mode">
+          <span class="mode-title">
+            <input type="radio" name="displayMode" value="persist_until_5s" />
+            Guaranteed Persistence
+          </span>
+          <p class="mode-desc">
+            Recommended. Stays visible until required duration completes.
+          </p>
+        </label>
+        <label class="mode">
+          <span class="mode-title">
+            <input type="radio" name="displayMode" value="wait_time_only" />
+            Strict Wait-Time Only
+          </span>
+          <p class="mode-desc warn">
+            Closes immediately when AI streams. Early close if response is fast.
+          </p>
+        </label>
+      </fieldset>
+
+      <!-- Control 5: Pause setting -->
+      <fieldset>
+        <legend>Pause setting</legend>
+        <div class="row" style="margin-bottom: 6px;">
+          <span><b>Ads enabled</b></span>
+          <span class="toggle"><input type="checkbox" id="enabled" /><i></i></span>
+        </div>
+
+        <div id="pause-banner" role="status" hidden>
+          <div>
+            <b>Ads paused</b>
+            <p id="pause-detail"></p>
+          </div>
+          <button id="pause-resume" class="action" type="button" style="width: auto; padding: 4px 8px; font-size: 11px;">Resume</button>
+        </div>
+
+        <div style="display: flex; gap: 6px; align-items: center; margin-top: 6px;">
+          <select id="pause-duration" style="flex: 1;">
+            <option value="5">5 minutes</option>
+            <option value="10">10 minutes</option>
+            <option value="15">15 minutes</option>
+            <option value="60">1 hour</option>
+            <option value="restart">Until restart</option>
+            <option value="indefinite">Until resumed</option>
+          </select>
+          <button class="action" id="pause-apply" type="button" style="width: auto; padding: 6px 10px; white-space: nowrap;">Pause</button>
         </div>
       </fieldset>
 
-      <fieldset>
-        <legend>Theme</legend>
-        <select id="theme">
-          <option value="auto">Auto (match website)</option>
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
-        </select>
-      </fieldset>
+      <!-- 3. STATS, SYNC BUTTON, OPEN DASHBOARD, AND FOUR LINKS -->
 
+      <!-- Stats -->
       <div class="stats">
         <div class="stat"><b id="stat-balance">–</b><span>earned</span></div>
         <div class="stat"><b id="stat-cache">–</b><span>ads cached</span></div>
         <div class="stat"><b id="stat-pending">–</b><span>pending sync</span></div>
       </div>
 
+      <!-- Sync Button -->
       <button class="action" id="sync-now" type="button" style="margin-top: 6px; margin-bottom: 6px;">↻ Sync pending now</button>
 
-      <button class="action" id="open-dashboard">Open earnings dashboard</button>
+      <!-- Open Dashboard Button -->
+      <button class="action primary-btn" id="open-dashboard" type="button" style="margin-bottom: 10px;">Open earnings dashboard</button>
     </div>
 
+    <!-- Four links -->
     <div class="links">
       <button class="link" id="open-site" type="button">MeanTime website</button>
       <button class="link" id="open-dashboard-link" type="button">Earnings dashboard</button>
       <button class="link" id="open-privacy" type="button">Privacy policy</button>
       <button class="link" id="open-terms" type="button">Terms of service</button>
     </div>
-
 
     <script type="module" src="./main.ts"></script>
   </body>
