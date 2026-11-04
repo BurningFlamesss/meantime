@@ -7,8 +7,10 @@ import {
   SOCIAL_TASK_REWARD_USD,
   campaignInputSchema,
   clickEventSchema,
+  minCpiForDuration,
   payoutRequestSchema,
   taskSubmissionSchema,
+  userSettingsUpdateSchema,
   verifyLeaseToken,
   type CampaignStats,
   type TaskSubmission,
@@ -132,6 +134,31 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext) {
       campaignHeadline: r.headline ?? "",
     }));
     return log;
+  });
+
+  /* ------------------------------ settings ------------------------------ */
+  app.get("/me/settings", async (req, reply) => {
+    const auth = requireUser(req, reply, ctx.env.JWT_SECRET);
+    if (!auth?.userId) return;
+    const [user] = await ctx.db
+      .select({ maxAdDurationSec: users.maxAdDurationSec })
+      .from(users)
+      .where(eq(users.id, auth.userId))
+      .limit(1);
+    return { maxAdDurationSec: user?.maxAdDurationSec ?? 15 };
+  });
+
+  app.patch("/me/settings", async (req, reply) => {
+    const auth = requireUser(req, reply, ctx.env.JWT_SECRET);
+    if (!auth?.userId) return;
+    const body = userSettingsUpdateSchema.parse(req.body);
+    if (body.maxAdDurationSec !== undefined) {
+      await ctx.db
+        .update(users)
+        .set({ maxAdDurationSec: body.maxAdDurationSec, updatedAt: new Date() })
+        .where(eq(users.id, auth.userId));
+    }
+    return { ok: true, maxAdDurationSec: body.maxAdDurationSec ?? 15 };
   });
 
   /* ------------------------------ social tasks -------------------------- */
@@ -521,6 +548,16 @@ export async function advertiserRoutes(app: FastifyInstance, ctx: AppContext) {
       .from(campaigns)
       .where(and(eq(campaigns.advertiserId, auth.advertiserId), eq(campaigns.status, "active")));
 
+    const durationSec = body.durationSec ?? 5;
+    const minBid = minCpiForDuration(durationSec);
+    if (body.cpiMicro < minBid) {
+      return reply.code(400).send({
+        error: "cpi_below_minimum_for_duration",
+        minCpiMicro: minBid,
+        durationSec,
+      });
+    }
+
     // Laya auto-moderation.
     const moderation = await moderateCampaign({
       headline: body.headline,
@@ -551,6 +588,7 @@ export async function advertiserRoutes(app: FastifyInstance, ctx: AppContext) {
         targetUrl: body.targetUrl,
         dailyBudgetMicro: BigInt(body.dailyBudgetMicro),
         cpiMicro: BigInt(body.cpiMicro),
+        durationSec,
         targetPlatforms: body.targetPlatforms,
         targetGeoClusters: body.targetGeoClusters,
         maxPerDayPerUser: body.maxPerDayPerUser,

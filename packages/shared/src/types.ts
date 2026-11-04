@@ -33,8 +33,10 @@ export interface PrefetchedAd {
   leaseToken: string;
   issuedAt: number;
   expiresAt: number;
-  /** Advertiser bid per verified 5s view, micro-dollars. Server-authoritative. */
+  /** Advertiser bid per verified view, micro-dollars. Server-authoritative. */
   cpiMicro: number;
+  /** Required view duration in seconds (2s - 15s). Defaults to 5s. */
+  durationSec?: number;
   headline: string;
   bodyText: string;
   ctaText: string;
@@ -53,6 +55,7 @@ export interface LeaseTokenPayload {
   cid: string; // campaign id
   iat: number; // issued at, unix seconds
   exp: number; // expires at, unix seconds
+  dur?: number; // duration seconds (2-15)
 }
 
 /** What the content script knows at trigger time — never includes prompt text. */
@@ -80,6 +83,8 @@ export interface ImpressionEvent {
   hoverIntentional: boolean;
   closedReason: CloseReason;
   earned: boolean;
+  /** Required view duration in seconds (2-15) for this ad/impression. */
+  durationSec?: number;
   pohi: PohiSignals;
   /** How many prompts this user sent in the trailing hour (for pacing audits). */
   promptsLastHour: number;
@@ -109,6 +114,7 @@ export interface PrefetchRequest {
   deviceId: string;
   count: number;
   platforms: string[];
+  maxDurationSec?: number;
 }
 
 export interface PrefetchResponse {
@@ -150,6 +156,7 @@ export interface CampaignInput {
   targetUrl: string;
   dailyBudgetMicro: number;
   cpiMicro: number;
+  durationSec?: number;
   targetPlatforms: string[];
   /** Geo clusters the campaign should serve in; empty = worldwide. */
   targetGeoClusters: string[];

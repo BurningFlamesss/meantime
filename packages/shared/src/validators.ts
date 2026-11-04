@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   AD_COPY_LIMITS,
+  CAMPAIGN_DURATION,
   PLATFORM_IDS,
   TELEMETRY,
 } from "./constants.js";
@@ -34,6 +35,7 @@ export const impressionEventSchema = z.object({
     "superseded",
   ]),
   earned: z.boolean(),
+  durationSec: z.number().int().min(CAMPAIGN_DURATION.MIN_SEC).max(CAMPAIGN_DURATION.MAX_SEC).optional(),
   pohi: pohiSignalsSchema,
   promptsLastHour: z.number().int().min(0).max(100_000),
 });
@@ -50,6 +52,7 @@ export const prefetchRequestSchema = z.object({
   deviceId: z.string().min(8).max(128),
   count: z.number().int().min(1).max(25),
   platforms: z.array(z.string().max(32)).max(8).default([]),
+  maxDurationSec: z.number().int().min(CAMPAIGN_DURATION.MIN_SEC).max(CAMPAIGN_DURATION.MAX_SEC).optional(),
 });
 
 /**
@@ -77,10 +80,15 @@ export const campaignInputSchema = z.object({
   targetUrl: httpUrlSchema,
   dailyBudgetMicro: z.number().int().positive().max(1_000_000_000_000),
   cpiMicro: z.number().int().positive().max(100_000_000),
+  durationSec: z.number().int().min(CAMPAIGN_DURATION.MIN_SEC).max(CAMPAIGN_DURATION.MAX_SEC).default(CAMPAIGN_DURATION.DEFAULT_SEC),
   targetPlatforms: z.array(z.string().max(32)).min(1).max(8),
   targetGeoClusters: z.array(z.string().max(16)).max(32).default([]),
   maxPerDayPerUser: z.number().int().min(1).max(20).default(3),
   cooldownSec: z.number().int().min(0).max(86_400).default(1800),
+});
+
+export const userSettingsUpdateSchema = z.object({
+  maxAdDurationSec: z.number().int().min(CAMPAIGN_DURATION.MIN_SEC).max(CAMPAIGN_DURATION.MAX_SEC).optional(),
 });
 
 export const registerUserSchema = z.object({

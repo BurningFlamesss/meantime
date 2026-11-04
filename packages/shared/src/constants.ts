@@ -20,8 +20,21 @@ export const REFERRAL_BONUS_USD = 500_000; // $0.50 to the referrer
 export const REFERRAL_QUALIFY_EARNINGS_USD = 1_000_000; // $1.00 verified
 export const MAX_CAMPAIGN_VARIANTS = 3;
 
-/** Cumulative active-viewport time required for an impression to be paid. */
+/** Cumulative active-viewport time required for an impression to be paid. Default 5s. */
 export const MIN_VIEWABLE_MS = 5_000;
+
+export const CAMPAIGN_DURATION = {
+  MIN_SEC: 2,
+  MAX_SEC: 15,
+  DEFAULT_SEC: 5,
+  /** Minimum bid per second of required view time (micro-dollars). $0.002/s = $0.010 for 5s. */
+  MIN_CPI_MICRO_PER_SEC: 2_000,
+} as const;
+
+export function minCpiForDuration(durationSec: number): number {
+  const clamped = Math.max(CAMPAIGN_DURATION.MIN_SEC, Math.min(CAMPAIGN_DURATION.MAX_SEC, durationSec));
+  return clamped * CAMPAIGN_DURATION.MIN_CPI_MICRO_PER_SEC;
+}
 /** Fraction of the ad element that must be visible to accrue time. */
 export const VIEWABILITY_THRESHOLD = 0.75;
 /** A hover only counts as intentional after this much continuous hover time. */

@@ -79,7 +79,8 @@ class MeanTimeBackground {
         const identity = await storageGet<Identity | null>(STORAGE_KEYS.IDENTITY, null);
         if (!identity) return null;
         if (msg.platform) await storageSet(LAST_PLATFORM_KEY, msg.platform);
-        const ad = await takeAd(Date.now(), msg.platform);
+        const settings = await getSettings();
+        const ad = await takeAd(Date.now(), msg.platform, settings.maxAdDurationSec);
         void this.prefetchIfNeeded(!ad);
         return ad;
       }
@@ -143,6 +144,7 @@ class MeanTimeBackground {
     if (!(await this.acquireLock(PREFETCH_LOCK_KEY, 30_000))) return;
 
     try {
+      const settings = await getSettings();
       const lastPlatform = await storageGet<string | null>(LAST_PLATFORM_KEY, null);
       const count = EXTENSION_CACHE.PREFETCH_BATCH_SIZE;
       const res = await apiFetch<PrefetchResponse>("/ads/prefetch", {
@@ -151,6 +153,7 @@ class MeanTimeBackground {
           deviceId: identity.deviceId,
           count,
           platforms: lastPlatform ? [lastPlatform] : [],
+          maxDurationSec: settings.maxAdDurationSec,
         },
       });
       const pool = await getCachedAds();

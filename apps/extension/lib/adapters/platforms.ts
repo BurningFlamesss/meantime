@@ -28,7 +28,9 @@ export class OpenAiAdapter extends BaseAdapter {
       latestMessageNode.querySelector<HTMLElement>(".flex-row-reverse, [class*='turn-action-controls']");
 
     if (actionRow) {
-      actionRow.style.position = "relative";
+      if (getComputedStyle(actionRow).position === "static") {
+        actionRow.style.position = "relative";
+      }
       actionRow.style.width = "100%";
       actionRow.style.minHeight = "32px";
       return { element: actionRow, position: "append" };
@@ -37,35 +39,40 @@ export class OpenAiAdapter extends BaseAdapter {
     const turn =
       latestMessageNode.closest<HTMLElement>("[data-content-search-unit-key], .group\\/user-message") ??
       latestMessageNode;
-    turn.style.position = "relative";
+    if (getComputedStyle(turn).position === "static") {
+      turn.style.position = "relative";
+    }
     return { element: turn, position: "append" };
   }
 
   override getAiMessageFooterSlot(latestAiNode: HTMLElement): MountTarget | null {
     const turn =
       latestAiNode.closest<HTMLElement>(
-        "[data-turn-key], [data-content-search-turn-key], [data-chatgpt-search-unit-key], .group, .block-BQZwFn",
+        "[data-turn-key], [data-content-search-turn-key], [data-chatgpt-search-unit-key], .group, .block-BQZwFn, article",
       ) ?? latestAiNode.parentElement ?? latestAiNode;
 
-    // Search for any of the assistant action buttons (copy, read aloud, share, try again, more)
-    const actionBtn = turn.querySelector<HTMLElement>(
-      "button[aria-label*='Copy' i], button[aria-label*='Read aloud' i], button[aria-label*='Share' i], button[aria-label*='Try again' i], button[aria-label*='Regenerate' i], button[aria-label*='Good' i], button[aria-label*='Bad' i], button[aria-label*='More' i]",
-    );
+    // Search for the assistant action controls container or buttons
+    const controls = turn.querySelector<HTMLElement>("[class*='turn-action-controls'], .turn-action-controls");
+    const actionBtn = controls
+      ? null
+      : turn.querySelector<HTMLElement>(
+          "button[aria-label*='Copy' i], button[aria-label*='Read aloud' i], button[aria-label*='Share' i], button[aria-label*='Try again' i], button[aria-label*='Regenerate' i], button[aria-label*='Good' i], button[aria-label*='Bad' i], button[aria-label*='More' i]",
+        );
 
     let actionRow: HTMLElement | null = null;
-    if (actionBtn) {
+    if (controls) {
+      actionRow = controls.parentElement ?? controls;
+    } else if (actionBtn) {
+      // Must NOT match actionBtn itself — climb to parent container
       actionRow =
-        actionBtn.closest<HTMLElement>(".flex.items-center, [class*='turn-action-controls'], [class*='actionRow'], .flex.gap-1, .flex.gap-0\\.5") ??
-        actionBtn.parentElement?.parentElement ??
+        actionBtn.parentElement?.closest<HTMLElement>(".flex.items-center, [class*='actionRow'], .flex.gap-1, .flex.gap-0\\.5") ??
         actionBtn.parentElement;
-    } else {
-      actionRow = turn.querySelector<HTMLElement>(
-        "[class*='turn-action-controls'], [class*='actionRow'], div.flex:has(> button[aria-label*='Copy' i])",
-      );
     }
 
     if (actionRow) {
-      actionRow.style.position = "relative";
+      if (getComputedStyle(actionRow).position === "static") {
+        actionRow.style.position = "relative";
+      }
       actionRow.style.width = "100%";
       actionRow.style.minHeight = "32px";
       return { element: actionRow, position: "append" };
@@ -75,19 +82,18 @@ export class OpenAiAdapter extends BaseAdapter {
   }
 
   override getThinkingSlot(): MountTarget | null {
+    // Only match ACTIVE thinking indicator, NEVER completed "Thought for X s" button!
     const selector = [
       "button[aria-label*='Thinking' i]",
-      "button[aria-label*='Thought' i]",
       "div[data-testid='thinking-indicator']",
       "[data-component='thinking']",
       "[data-state='thinking']",
-      "[data-testid*='reasoning']",
+      "[data-testid*='reasoning']:not([data-state='complete'])",
       "button:has(.loading-shimmer)",
       "span:has(> .loading-shimmer)",
       "div:has(> svg.animate-spin)",
-      "div[class*='thinking' i]",
-      "div[class*='thought' i]",
-      "div[class*='reasoning' i]",
+      "button:has(svg.animate-spin)",
+      "div[class*='thinking' i]:not([class*='thought' i])",
     ].join(", ");
 
     const matches = Array.from(document.querySelectorAll<HTMLElement>(selector));
@@ -99,7 +105,8 @@ export class OpenAiAdapter extends BaseAdapter {
         const btn = buttons[i];
         if (!btn) continue;
         const txt = btn.textContent?.trim().toLowerCase() ?? "";
-        if (txt.startsWith("thinking") || txt.startsWith("thought")) {
+        // Match only active "thinking", NEVER "thought"
+        if (txt.startsWith("thinking")) {
           latest = btn;
           break;
         }
@@ -110,10 +117,13 @@ export class OpenAiAdapter extends BaseAdapter {
 
     const container =
       (latest instanceof HTMLButtonElement || latest.tagName === "BUTTON" ? latest.parentElement : null) ??
-      latest.closest<HTMLElement>(".flex.items-center, div:has(> button)") ??
+      latest.parentElement?.closest<HTMLElement>(".flex.items-center, div:has(> button)") ??
+      latest.parentElement ??
       latest;
 
-    container.style.position = "relative";
+    if (getComputedStyle(container).position === "static") {
+      container.style.position = "relative";
+    }
     container.style.width = "100%";
     container.style.minHeight = "32px";
     return { element: container, position: "append" };
@@ -122,24 +132,51 @@ export class OpenAiAdapter extends BaseAdapter {
   override getAboveComposerSlot(): MountTarget | null {
     const portal = this.qs<HTMLElement>("[data-above-composer-portal='true']");
     if (portal) {
-      portal.style.position = "relative";
+      if (getComputedStyle(portal).position === "static") {
+        portal.style.position = "relative";
+      }
       return { element: portal, position: "append" };
     }
 
     const input = this.qs<HTMLElement>(this.config.promptInputSelector);
     const form = input?.closest<HTMLElement>("form") ?? this.qs<HTMLElement>("form[data-chatgpt-composer], form");
     if (form) {
-      form.style.position = "relative";
+      // NEVER overwrite position: sticky on composer forms!
+      if (getComputedStyle(form).position === "static") {
+        form.style.position = "relative";
+      }
       return { element: form, position: "append" };
     }
 
     const composerArea = input?.closest<HTMLElement>(".composer-parent, [class*='composer-bar'], [data-composer-surface]") ?? input?.parentElement;
     if (composerArea) {
-      composerArea.style.position = "relative";
+      if (getComputedStyle(composerArea).position === "static") {
+        composerArea.style.position = "relative";
+      }
       return { element: composerArea, position: "append" };
     }
 
     return null;
+  }
+
+  override findLatestAiMessage(): HTMLElement | null {
+    // Modern ChatGPT uses div[data-turn-key] or article. An assistant turn is any turn
+    // that does not contain a user message bubble.
+    const turns = Array.from(
+      document.querySelectorAll<HTMLElement>(
+        "[data-turn-key], [data-chatgpt-search-unit-key$=':assistant'], [data-content-search-unit-key$=':assistant'], [data-message-author-role='assistant'], article[data-testid*='conversation-turn']",
+      ),
+    );
+    for (let i = turns.length - 1; i >= 0; i--) {
+      const turn = turns[i];
+      if (!turn) continue;
+      if (turn.querySelector("[data-user-message-bubble='true'], [data-conversation-role='user'], [data-chatgpt-search-unit-key$=':user']")) {
+        continue;
+      }
+      const content = turn.querySelector<HTMLElement>(".markdown, [data-markdown-text-style='assistant-message'], .text-size-chat, [class*='prose']");
+      return content ?? turn;
+    }
+    return this.last(this.config.aiMessageSelector);
   }
 }
 

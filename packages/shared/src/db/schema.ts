@@ -89,6 +89,7 @@ export const users = pgTable(
     signupAsn: integer("signup_asn"),
     welcomeBonusCredited: boolean("welcome_bonus_credited").notNull().default(false),
     trustScore: integer("trust_score"),
+    maxAdDurationSec: integer("max_ad_duration_sec").notNull().default(15),
     isFrozen: boolean("is_frozen").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -201,8 +202,10 @@ export const campaigns = pgTable(
     ctaText: text("cta_text").notNull(),
     targetUrl: text("target_url").notNull(),
     dailyBudgetMicro: bigint("daily_budget_micro", { mode: "bigint" }).notNull(),
-    /** Bid per verified 5s view, micro-dollars. */
+    /** Bid per verified view, micro-dollars. */
     cpiMicro: bigint("cpi_micro", { mode: "bigint" }).notNull(),
+    /** Required view duration in seconds (2s - 15s, default 5s). */
+    durationSec: integer("duration_sec").notNull().default(5),
     targetPlatforms: jsonb("target_platforms").$type<string[]>().notNull().default([]),
     /** Geo clusters to serve in (e.g. ["NA-EAST","EU-WEST"]); empty = worldwide. */
     targetGeoClusters: jsonb("target_geo_clusters").$type<string[]>().notNull().default([]),
@@ -351,6 +354,8 @@ export const impressions = pgTable(
     cumulativeVisibleMs: integer("cumulative_visible_ms").notNull(),
     hoverMs: integer("hover_ms").notNull().default(0),
     hoverIntentional: boolean("hover_intentional").notNull().default(false),
+    /** Required view duration in seconds for this impression. */
+    durationSec: integer("duration_sec").notNull().default(5),
     /** Coarse geo cluster resolved server-side from the client IP. Never a raw IP. */
     geoCluster: text("geo_cluster"),
     earned: boolean("earned").notNull(),

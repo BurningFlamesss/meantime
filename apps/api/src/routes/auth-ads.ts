@@ -335,6 +335,7 @@ export async function adsRoutes(app: FastifyInstance, ctx: AppContext) {
 
     const eligible = rows.filter((c) => {
       if (c.spendDate === today && c.spentTodayMicro >= c.dailyBudgetMicro) return false;
+      if (body.maxDurationSec && (c.durationSec ?? 5) > body.maxDurationSec) return false;
       if (body.platforms.length > 0) {
         const targets = c.targetPlatforms as string[];
         if (!targets.some((p) => body.platforms.includes(p))) return false;
@@ -393,6 +394,7 @@ export async function adsRoutes(app: FastifyInstance, ctx: AppContext) {
         cid: campaign.id,
         iat: nowSec,
         exp: nowSec + LEASE.TTL_SECONDS,
+        dur: campaign.durationSec ?? 5,
       };
       const leaseToken = await signLeaseToken(payload, ctx.env.LEASE_HMAC_SECRET);
       await ctx.db.insert(adLeases).values({
@@ -412,6 +414,7 @@ export async function adsRoutes(app: FastifyInstance, ctx: AppContext) {
         issuedAt: nowSec,
         expiresAt: nowSec + LEASE.TTL_SECONDS,
         cpiMicro: Number(campaign.cpiMicro),
+        durationSec: campaign.durationSec ?? 5,
         headline: copy.headline,
         bodyText: copy.bodyText,
         ctaText: copy.ctaText,

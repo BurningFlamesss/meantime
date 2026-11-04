@@ -150,8 +150,9 @@ MeanTime should feel like a quiet utility, not an ad network:
 1. Advertiser creates an account and funds a balance (deposit flow is not yet
    implemented end-to-end).
 2. Advertiser writes a headline (≤70 chars), body (≤140), CTA (≤24), target URL,
-   daily budget, bid per verified 5-second view, platforms, and optional geo
-   clusters.
+   daily budget, view duration (2s–15s, default 5s), bid per verified view (minimum
+   $0.002/s, e.g. $0.010 for 5s), platforms, and optional geo clusters.
+   Users can configure their maximum acceptable ad duration (2s–15s, default 15s).
 3. Deterministic policy checks run first (blocked terms, malformed URL,
    suspicious TLDs, character repetition).
 4. A local non-chat classifier scores the copy. Score ≥85 auto-approves,

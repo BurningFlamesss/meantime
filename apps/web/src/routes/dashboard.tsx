@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { PAYOUT_THRESHOLD_USD, type TransparencyLogEntry, type UserBalance } from "@meantime/shared";
+import { CAMPAIGN_DURATION, PAYOUT_THRESHOLD_USD, type TransparencyLogEntry, type UserBalance } from "@meantime/shared";
 import { api } from "../lib/api";
 import { formatMicro, formatMicroCents, formatMs } from "../lib/format";
 import { Shell, PageHeader } from "../lib/shell";
@@ -13,12 +13,36 @@ export const Route = createFileRoute("/dashboard")({
 function Dashboard() {
   const [balance, setBalance] = useState<UserBalance | null>(null);
   const [log, setLog] = useState<TransparencyLogEntry[]>([]);
+  const [maxAdDurationSec, setMaxAdDurationSec] = useState<number>(15);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [settingsSaved, setSettingsSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     api<UserBalance>("/me/balance").then(setBalance).catch((e) => setError(String(e)));
     api<TransparencyLogEntry[]>("/me/impressions").then(setLog).catch(() => undefined);
+    api<{ maxAdDurationSec: number }>("/me/settings")
+      .then((s) => setMaxAdDurationSec(s.maxAdDurationSec ?? 15))
+      .catch(() => undefined);
   }, []);
+
+  async function updateMaxDuration(sec: number): Promise<void> {
+    setMaxAdDurationSec(sec);
+    setSavingSettings(true);
+    setSettingsSaved(false);
+    try {
+      await api<{ success: boolean; maxAdDurationSec: number }>("/me/settings", {
+        method: "PATCH",
+        json: { maxAdDurationSec: sec },
+      });
+      setSettingsSaved(true);
+      setTimeout(() => setSettingsSaved(false), 2000);
+    } catch {
+      // Ignore
+    } finally {
+      setSavingSettings(false);
+    }
+  }
 
   return (
     <Shell>
@@ -49,6 +73,38 @@ function Dashboard() {
               / {formatMicroCents(PAYOUT_THRESHOLD_USD)}
             </span>
           </p>
+        </div>
+      </section>
+
+      <section className="mt-8">
+        <div className="card-pad max-w-xl">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-neutral-900">Maximum ad duration</h2>
+              <p className="mt-0.5 text-xs text-neutral-500">
+                You will only be served ads that require up to this view time. Longer ads pay more per view.
+              </p>
+            </div>
+            <span className="tabular text-sm font-semibold text-neutral-900">{maxAdDurationSec}s</span>
+          </div>
+          <div className="mt-4">
+            <input
+              type="range"
+              min={CAMPAIGN_DURATION.MIN_SEC}
+              max={CAMPAIGN_DURATION.MAX_SEC}
+              step={1}
+              value={maxAdDurationSec}
+              onChange={(e) => void updateMaxDuration(Number(e.target.value))}
+              className="w-full accent-neutral-900"
+            />
+            <div className="mt-1 flex justify-between text-[11px] text-neutral-400">
+              <span>2s (quickest)</span>
+              <span>5s (standard)</span>
+              <span>15s (highest earnings)</span>
+            </div>
+          </div>
+          {settingsSaved && <p className="mt-2 text-xs font-medium text-emerald-600">Saved preference.</p>}
+          {savingSettings && <p className="mt-2 text-xs text-neutral-400">Saving…</p>}
         </div>
       </section>
 

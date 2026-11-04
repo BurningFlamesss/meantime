@@ -42,6 +42,8 @@ async function init(): Promise<void> {
 
   const enabled = el<HTMLInputElement>("enabled");
   const placement = el<HTMLSelectElement>("placement");
+  const maxDuration = el<HTMLInputElement>("max-duration");
+  const maxDurationLabel = el<HTMLElement>("max-duration-label");
   const theme = el<HTMLSelectElement>("theme");
   const pauseBanner = el<HTMLElement>("pause-banner");
   const pauseDetail = el<HTMLElement>("pause-detail");
@@ -196,6 +198,8 @@ async function init(): Promise<void> {
   enabled.checked = settings.enabled;
   placement.value = settings.placement;
   theme.value = settings.theme ?? "auto";
+  maxDuration.value = String(settings.maxAdDurationSec ?? 15);
+  maxDurationLabel.textContent = `${settings.maxAdDurationSec ?? 15}s`;
   for (const radio of displayModeRadios) {
     radio.checked = radio.value === settings.displayMode;
     radio.addEventListener("change", async () => {
@@ -241,6 +245,17 @@ async function init(): Promise<void> {
     await saveSettings({ placement: settings.placement });
   });
 
+  maxDuration.addEventListener("input", () => {
+    maxDurationLabel.textContent = `${maxDuration.value}s`;
+  });
+
+  maxDuration.addEventListener("change", async () => {
+    const val = Math.max(2, Math.min(15, Number(maxDuration.value)));
+    settings = { ...settings, maxAdDurationSec: val };
+    await saveSettings({ maxAdDurationSec: val });
+    void chrome.runtime.sendMessage({ type: "prefetch_now" }).then(() => loadStatus()).catch(() => undefined);
+  });
+
   theme.addEventListener("change", async () => {
     settings = { ...settings, theme: theme.value as ExtensionSettings["theme"] };
     await saveSettings({ theme: settings.theme });
@@ -268,6 +283,8 @@ async function init(): Promise<void> {
         settings = next;
         placement.value = settings.placement;
         theme.value = settings.theme ?? "auto";
+        maxDuration.value = String(settings.maxAdDurationSec ?? 15);
+        maxDurationLabel.textContent = `${settings.maxAdDurationSec ?? 15}s`;
         for (const radio of displayModeRadios) {
           radio.checked = radio.value === settings.displayMode;
         }

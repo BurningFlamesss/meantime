@@ -16,7 +16,7 @@ private beta · P2 = post-launch / polish
 | TanStack Start web app | `[x]` verified | Production SSR bundle serves all routes with 200. `/sign-up`, `/sign-in`, dashboard, sign-out, and sign-in-again passed 7/7 in Chromium. Advertiser sign-up/sign-in with rotating sessions, and `/r/:code` attribution. |
 | API smoke suite | `[x]` verified | `pnpm smoke` passes 30/30 against the real `laya-serve`: advertiser sessions, moderation, the 55% payment, referral attribution + vesting, plus the reviewer queue and campaign/task/payout decisions. It loads `apps/api/.env` for `ADMIN_API_KEY`. |
 | WXT extension | `[x]` verified | `.output/chrome-mv3` builds (189.2 KB; 94.5 KB content, 74.4 KB worker, 9.5 KB popup) and was loaded in real Chromium: first-run popup sign-up, prefetch, ad injection, 5 s payment, reload persistence, and sign-out all passed 19/19. |
-| Database migrations | `[x]` applied | `apps/api/drizzle/0000`–`0005`, 18 tables, applied to PostgreSQL 16 (compose) and 18. |
+| Database migrations | `[x]` applied | `apps/api/drizzle/0000`–`0006`, 18 tables, applied to PostgreSQL 16 (compose) and 18. |
 | Demo seed | `[x]` run | 1 advertiser + 2 active campaigns inserted; re-runs are idempotent. |
 | Docker compose | `[x]` verified | The real pinned `v0.4.21` Laya image builds and runs healthy beside Postgres 16, Redis 7, and s3mock; migrations + seed apply and `pnpm smoke` passes 30/30. `LAYA_MODELS=english,multilingual` preloads both checkpoints; `LAYA_DEFAULT_MODEL=english` keeps undecided short task states off a lazy download. |
 | Laya moderation | `[x]` real models | Real `laya-serve` container on `:8000` with the English **and multilingual** checkpoints. `pnpm laya:check` passes 46/46, including real probes: clean ad 82/`needs_review`, crypto scam 10/`auto_rejected`, benign task 93/`needs_review`, phishing task 7/`auto_rejected`; every inference <650 ms. Non-English verdicts are advisory (`non_english_review`). |
@@ -50,6 +50,11 @@ private beta · P2 = post-launch / polish
 - [x] Closed Shadow DOM ad widget with progress, earned badge, CTA, dismiss,
       snooze menu, and placement options.
 - [x] Cumulative viewport timer (IntersectionObserver + visibility + focus).
+- [x] Configurable campaign duration (2s–15s, default 5s) with duration-based CPI pricing ($0.002/sec minimum bid).
+- [x] User maximum ad duration preference (2s–15s, default 15s) in extension popup and web dashboard (`/dashboard` via `/me/settings`).
+- [x] Hover retention for ads: ad never disappears prematurely while user is hovering over it, even when view timer is earned; disappears on mouse leave only if earned, without dismissing early on brief pre-completion hover.
+- [x] Zero-layout-shift widget placements across 4 slots: `above_composer` (absolute float), `under_prompt` (clipped to action controls row), `thinking_indicator` (docked to active thinking indicator, never on completed thought button), and `ai_footer` (docked to AI response action row).
+- [x] Strict `wait_time_only` mode closing immediately on the first streamed AI reply token via thread-level container observing and 50ms polling loop.
 - [x] Intentional hover tracking (500 ms gate).
 - [x] PoHI keystroke/paste counters (no prompt text).
 - [x] Batched telemetry queue with deflate compression.

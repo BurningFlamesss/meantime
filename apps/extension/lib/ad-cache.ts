@@ -56,11 +56,13 @@ export function filterEligible(
   history: ImpressionHistory,
   now: number,
   platform?: string,
+  maxDurationSec?: number,
 ): PrefetchedAd[] {
   const today = dayKey(now);
   return pool.filter((ad) => {
     if (ad.expiresAt * 1000 <= now) return false;
     if (!supportsPlatform(ad, platform)) return false;
+    if (maxDurationSec !== undefined && (ad.durationSec ?? 5) > maxDurationSec) return false;
     const rec = history[ad.campaignId];
     if (!rec) return true;
     const viewsToday = rec.days.filter((d) => d === today).length;
@@ -83,11 +85,15 @@ function pruneHistory(history: ImpressionHistory, now: number): ImpressionHistor
  * Pop the next eligible ad out of the cache and record it in the local
  * impression history. Returns null when nothing qualifies.
  */
-export function takeAd(now = Date.now(), platform?: string): Promise<PrefetchedAd | null> {
+export function takeAd(
+  now = Date.now(),
+  platform?: string,
+  maxDurationSec?: number,
+): Promise<PrefetchedAd | null> {
   return serial(async () => {
     const [pool, storedHistory] = await Promise.all([getCachedAds(), getHistory()]);
     const history = pruneHistory(storedHistory, now);
-    const eligible = filterEligible(pool, history, now, platform);
+    const eligible = filterEligible(pool, history, now, platform, maxDurationSec);
     const chosen = eligible[0];
     if (!chosen) return null;
 

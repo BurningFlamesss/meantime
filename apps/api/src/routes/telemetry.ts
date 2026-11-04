@@ -158,7 +158,8 @@ async function processEvent(
   if (!event.pohi.aiMutationVerified) reasons.push("no_ai_mutation");
 
   /* ---- Threshold & batch-level cadence ---- */
-  const viewableEnough = event.cumulativeVisibleMs >= MIN_VIEWABLE_MS;
+  const requiredMs = (lease.dur ?? event.durationSec ?? 5) * 1_000;
+  const viewableEnough = event.cumulativeVisibleMs >= requiredMs;
   if (!viewableEnough) reasons.push("below_threshold");
   if (batchCriticalFindings.length > 0) reasons.push(...batchCriticalFindings.map((f) => f.rule));
 
@@ -218,6 +219,7 @@ async function processEvent(
         cumulativeVisibleMs: Math.round(event.cumulativeVisibleMs),
         hoverMs: Math.round(event.hoverMs ?? 0),
         hoverIntentional: event.hoverIntentional ?? false,
+        durationSec: campaign.durationSec ?? lease.dur ?? event.durationSec ?? 5,
         geoCluster,
         earned: true,
         earnedMicro,
@@ -318,6 +320,7 @@ async function persist(
       cumulativeVisibleMs: Math.round(event.cumulativeVisibleMs),
       hoverMs: Math.round(event.hoverMs ?? 0),
       hoverIntentional: event.hoverIntentional ?? false,
+      durationSec: event.durationSec ?? 5,
       geoCluster,
       earned: false,
       earnedMicro,

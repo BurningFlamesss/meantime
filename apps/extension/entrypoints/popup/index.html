@@ -199,6 +199,24 @@
       </fieldset>
 
       <fieldset>
+        <legend>Maximum ad duration: <span id="max-duration-label">15s</span></legend>
+        <input
+          type="range"
+          id="max-duration"
+          min="2"
+          max="15"
+          step="1"
+          value="15"
+          style="width: 100%; margin: 6px 0;"
+        />
+        <div style="display: flex; justify-content: space-between; font-size: 10px; opacity: 0.7;">
+          <span>2s (quick)</span>
+          <span>5s (standard)</span>
+          <span>15s (max earnings)</span>
+        </div>
+      </fieldset>
+
+      <fieldset>
         <legend>Theme</legend>
         <select id="theme">
           <option value="auto">Auto (match website)</option>

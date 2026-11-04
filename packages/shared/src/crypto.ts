@@ -50,6 +50,7 @@ function canonicalPayload(p: LeaseTokenPayload): string {
     cid: p.cid,
     iat: p.iat,
     exp: p.exp,
+    ...(p.dur !== undefined ? { dur: p.dur } : {}),
   });
 }
 

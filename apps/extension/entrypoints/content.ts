@@ -235,15 +235,17 @@ class MeanTimeController {
       }
 
       // Fast mount resolution via MutationObserver (zero-latency DOM attachment)
-      const mountPoint = await this.waitForMountPoint(
+      const resolved = await this.waitForMountPoint(
         settings.placement,
         initialAiNode,
-        3_000,
+        settings.placement === "thinking_indicator" || settings.placement === "ai_footer" ? 1_000 : 3_000,
       );
-      if (!mountPoint) {
+      if (!resolved || !resolved.target) {
         console.warn("[MeanTime] Could not find mount point for placement:", settings.placement);
         return;
       }
+      const mountPoint = resolved.target;
+      const actualPlacement = resolved.placement;
 
       const ad = await adPromise;
       if (!ad) {
@@ -271,7 +273,7 @@ class MeanTimeController {
             }
           },
           onEarned: () => {
-            console.info("[MeanTime] 5s view verified — impression earned!");
+            console.info(`[MeanTime] ${(ad.durationSec ?? 5)}s view verified — impression earned!`);
             this.finalize("earned");
           },
           onClickCta: () => {
@@ -284,12 +286,12 @@ class MeanTimeController {
       );
 
       try {
-        widget.mount(mountPoint, settings.placement, resolvedTheme);
+        widget.mount(mountPoint, actualPlacement, resolvedTheme);
         console.info(
           "[MeanTime] Ad mounted successfully:",
           ad.headline,
           "at",
-          settings.placement,
+          actualPlacement,
           `(${resolvedTheme} theme)`,
         );
       } catch (err) {
@@ -308,13 +310,13 @@ class MeanTimeController {
         impressionId,
         submittedAt,
         displayMode: settings.displayMode,
-        placement: settings.placement,
+        placement: actualPlacement,
         pohiAtSubmit,
         closed: false,
       };
 
       this.pohi.reset();
-      this.watchReanchor(settings.placement);
+      this.watchReanchor(actualPlacement);
       this.armWatchdogs(widget);
       this.watchGeneration(widget, initialAiNode);
     } finally {
@@ -334,19 +336,19 @@ class MeanTimeController {
     placement: Placement,
     initialAiNode: HTMLElement | null,
     timeoutMs: number,
-  ): Promise<MountTarget | HTMLElement | null> {
+  ): Promise<{ target: MountTarget | HTMLElement | null; placement: Placement }> {
     // 1. "above_composer" is ready immediately (no waiting for response)
     if (placement === "above_composer") {
       const slot = this.adapter.getAboveComposerSlot();
-      if (slot) return Promise.resolve(slot);
+      if (slot) return Promise.resolve({ target: slot, placement: "above_composer" });
     }
 
-    return new Promise<MountTarget | HTMLElement | null>((resolve) => {
+    return new Promise<{ target: MountTarget | HTMLElement | null; placement: Placement }>((resolve) => {
       let resolved = false;
       let observer: MutationObserver | null = null;
       let timeoutTimer: number | null = null;
 
-      const finish = (target: MountTarget | HTMLElement | null) => {
+      const finish = (result: { target: MountTarget | HTMLElement | null; placement: Placement }) => {
         if (resolved) return;
         resolved = true;
         observer?.disconnect();
@@ -355,7 +357,7 @@ class MeanTimeController {
           clearTimeout(timeoutTimer);
           timeoutTimer = null;
         }
-        resolve(target);
+        resolve(result);
       };
 
       const checkNow = () => {
@@ -366,14 +368,14 @@ class MeanTimeController {
           if (isNew && latest) {
             const slot = this.adapter.getUserMessageActionSlot(latest);
             if (slot) {
-              finish(slot);
+              finish({ target: slot, placement: "under_prompt" });
               return true;
             }
           }
         } else if (placement === "thinking_indicator") {
           const thinking = this.adapter.getThinkingSlot();
           if (thinking) {
-            finish(thinking);
+            finish({ target: thinking, placement: "thinking_indicator" });
             return true;
           }
         } else if (placement === "ai_footer") {
@@ -382,7 +384,7 @@ class MeanTimeController {
           if (isNewAi && latestAi) {
             const slot = this.adapter.getAiMessageFooterSlot(latestAi);
             if (slot) {
-              finish(slot);
+              finish({ target: slot, placement: "ai_footer" });
               return true;
             }
           }
@@ -406,32 +408,31 @@ class MeanTimeController {
     });
   }
 
-  private fallbackMount(requestedPlacement?: Placement): MountTarget | HTMLElement | null {
+  private fallbackMount(requestedPlacement?: Placement): { target: MountTarget | HTMLElement | null; placement: Placement } {
     // If thinking indicator or AI footer was requested but didn't appear (e.g. non-reasoning model or slow response),
     // try to anchor under the latest user prompt
     if (requestedPlacement === "thinking_indicator" || requestedPlacement === "ai_footer") {
       const user = this.adapter.findLatestUserMessage();
       if (user) {
         const slot = this.adapter.getUserMessageActionSlot(user);
-        if (slot) return slot;
+        if (slot) return { target: slot, placement: "under_prompt" };
       }
     }
 
     // Clean above-composer slot outside the prompt form (NEVER inside form)
     const above = this.adapter.getAboveComposerSlot();
-    if (above) return above;
+    if (above) return { target: above, placement: "above_composer" };
 
     const user = this.adapter.findLatestUserMessage();
     if (user) {
       const slot = this.adapter.getUserMessageActionSlot(user);
-      if (slot) return slot;
+      if (slot) return { target: slot, placement: "under_prompt" };
     }
 
-    return (
-      document.querySelector<HTMLElement>(
-        "main, [data-app-shell-focus-area='main'], div[data-thread-user-message-navigation-content], .thread-scroll-container",
-      ) ?? document.body
-    );
+    const main = document.querySelector<HTMLElement>(
+      "main, [data-app-shell-focus-area='main'], div[data-thread-user-message-navigation-content], .thread-scroll-container",
+    ) ?? document.body;
+    return { target: main, placement: "under_prompt" };
   }
 
   /**
@@ -555,9 +556,10 @@ class MeanTimeController {
   private onFirstAiOutput(widget: AdWidget): void {
     if (!this.activeLease || this.activeLease.closed) return;
 
+    const requiredMs = (widget.ad.durationSec ?? 5) * 1_000;
     if (this.activeLease.displayMode === "wait_time_only") {
       this.finalize("stream_started");
-    } else if (widget.timer.cumulativeMs >= MIN_VIEWABLE_MS) {
+    } else if (widget.timer.cumulativeMs >= requiredMs) {
       this.finalize("earned");
     }
   }
@@ -602,8 +604,9 @@ class MeanTimeController {
     }
     this.preSubmitUserMsgKey = null;
 
+    const requiredMs = (widget.ad.durationSec ?? 5) * 1_000;
     const cumulativeVisibleMs = Math.min(MAX_EVENT_MS, Math.round(widget.timer.cumulativeMs));
-    const earned = cumulativeVisibleMs >= MIN_VIEWABLE_MS;
+    const earned = cumulativeVisibleMs >= requiredMs;
     const aiWaitDurationMs = Math.min(
       MAX_EVENT_MS,
       Math.max(0, Math.round((this.firstOutputAt ?? Date.now()) - lease.submittedAt)),
@@ -633,6 +636,7 @@ class MeanTimeController {
       hoverIntentional,
       closedReason: reason,
       earned,
+      durationSec: widget.ad.durationSec ?? 5,
       pohi: {
         ...lease.pohiAtSubmit,
         aiMutationVerified,

@@ -16,6 +16,7 @@ export interface ExtensionSettings {
   displayMode: DisplayMode;
   placement: Placement;
   theme: ThemePreference;
+  maxAdDurationSec: number;
   /** Epoch ms until which all injection is paused; 0 = not paused. */
   snoozedUntil: number;
   enabled: boolean;
@@ -25,6 +26,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   displayMode: "persist_until_5s",
   placement: "under_prompt",
   theme: "auto",
+  maxAdDurationSec: 15,
   snoozedUntil: 0,
   enabled: true,
 };

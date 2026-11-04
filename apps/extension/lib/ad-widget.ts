@@ -70,6 +70,28 @@ const CSS = `
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
 }
 
+:host([data-placement="under_prompt"]) {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 110px;
+  max-width: calc(100% - 110px);
+  z-index: 20;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+}
+:host([data-placement="under_prompt"]) .mt-wrap {
+  margin: 0;
+  width: 100%;
+  max-width: 100%;
+  height: 32px;
+  min-height: 32px;
+  padding: 2px 8px;
+  gap: 8px;
+}
+
 :host([data-placement="ai_footer"]) {
   position: absolute;
   top: 0;
@@ -335,6 +357,10 @@ export class AdWidget {
   private readonly menu: HTMLDivElement;
   readonly timer: ViewportTimer;
   readonly hover: HoverTracker;
+  readonly requiredDurationMs: number;
+  private isHovering = false;
+  private isEarned = false;
+  private pendingDestroyOnLeave = false;
   private disposed = false;
 
   constructor(
@@ -342,6 +368,7 @@ export class AdWidget {
     private readonly callbacks: WidgetCallbacks,
     initialTheme: "light" | "dark" = "dark",
   ) {
+    this.requiredDurationMs = (ad.durationSec ?? 5) * 1_000;
     this.host = document.createElement("div");
     this.host.dataset.meantime = "ad";
     this.shadow = this.host.attachShadow({ mode: "closed" });
@@ -465,12 +492,32 @@ export class AdWidget {
     this.wrap.append(badge, main, progress, this.earnedBadge, cta, controls);
     this.shadow.append(style, this.wrap);
 
-    this.timer = new ViewportTimer(this.host);
+    this.timer = new ViewportTimer(this.host, this.requiredDurationMs);
     this.hover = new HoverTracker(this.host);
+
+    // Track active hover so the ad doesn't disappear prematurely if user is reading it
+    this.host.addEventListener("pointerenter", () => {
+      this.isHovering = true;
+    });
+    this.host.addEventListener("pointerleave", () => {
+      this.isHovering = false;
+      if (this.pendingDestroyOnLeave) {
+        this.pendingDestroyOnLeave = false;
+        this.destroy(true);
+      }
+    });
+
     this.timer.onEarned = () => {
+      this.isEarned = true;
       this.progressBar.style.width = "100%";
       this.earnedBadge.classList.remove("mt-hidden");
       this.callbacks.onEarned();
+      if (this.isHovering) {
+        // While user is hovering, keep the ad visible until pointer leaves
+        this.pendingDestroyOnLeave = true;
+      } else {
+        this.destroy(true);
+      }
     };
   }
 
@@ -524,6 +571,7 @@ export class AdWidget {
       this.host.style.zIndex = "40";
     } else if (placement === "under_prompt") {
       this.host.style.position = "absolute";
+      this.host.style.top = "0";
       this.host.style.bottom = "0";
       this.host.style.left = "0";
       this.host.style.right = "110px";
@@ -579,7 +627,7 @@ export class AdWidget {
   private animateProgress(): void {
     const step = () => {
       if (this.disposed || this.timer.earned) return;
-      const pct = Math.min(100, (this.timer.cumulativeMs / MIN_VIEWABLE_MS) * 100);
+      const pct = Math.min(100, (this.timer.cumulativeMs / this.requiredDurationMs) * 100);
       this.progressBar.style.width = `${pct.toFixed(1)}%`;
       requestAnimationFrame(step);
     };

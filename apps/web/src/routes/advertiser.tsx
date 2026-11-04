@@ -2,6 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import {
   AD_COPY_LIMITS,
+  CAMPAIGN_DURATION,
+  minCpiForDuration,
   type CampaignAnalytics,
   type CampaignInput,
   type ModerationOutcome,
@@ -200,6 +202,7 @@ function AdvertiserPortalContent({ onSignedOut }: { onSignedOut: () => void }) {
     targetUrl: "",
     dailyBudgetMicro: 5_000_000,
     cpiMicro: 20_000,
+    durationSec: 5,
     targetPlatforms: ["openai"],
     targetGeoClusters: [],
   });
@@ -370,6 +373,35 @@ function AdvertiserPortalContent({ onSignedOut }: { onSignedOut: () => void }) {
             </div>
           </div>
 
+          <div>
+            <div className="flex items-center justify-between">
+              <label className="label">Ad view duration</label>
+              <span className="text-xs font-semibold text-neutral-900">{form.durationSec ?? 5} seconds</span>
+            </div>
+            <input
+              type="range"
+              min={CAMPAIGN_DURATION.MIN_SEC}
+              max={CAMPAIGN_DURATION.MAX_SEC}
+              step={1}
+              value={form.durationSec ?? 5}
+              onChange={(e) => {
+                const sec = Number(e.target.value);
+                const minBid = minCpiForDuration(sec);
+                setForm((prev) => ({
+                  ...prev,
+                  durationSec: sec,
+                  cpiMicro: Math.max(prev.cpiMicro, minBid),
+                }));
+              }}
+              className="w-full accent-neutral-900"
+            />
+            <div className="flex justify-between text-[11px] text-neutral-400">
+              <span>2s (min ${(minCpiForDuration(2) / 1_000_000).toFixed(3)})</span>
+              <span>5s (min ${(minCpiForDuration(5) / 1_000_000).toFixed(3)})</span>
+              <span>15s (min ${(minCpiForDuration(15) / 1_000_000).toFixed(3)})</span>
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="label">Daily budget ($)</label>
@@ -378,10 +410,19 @@ function AdvertiserPortalContent({ onSignedOut }: { onSignedOut: () => void }) {
                 className="input" />
             </div>
             <div>
-              <label className="label">Bid per 5s view ($)</label>
-              <input required type="number" min={0.001} step="0.001" value={form.cpiMicro / 1_000_000}
+              <label className="label">Bid per {form.durationSec ?? 5}s view ($)</label>
+              <input
+                required
+                type="number"
+                min={minCpiForDuration(form.durationSec ?? 5) / 1_000_000}
+                step="0.001"
+                value={form.cpiMicro / 1_000_000}
                 onChange={(e) => setForm({ ...form, cpiMicro: Math.round(Number(e.target.value) * 1_000_000) })}
-                className="input" />
+                className="input"
+              />
+              <p className="mt-1 text-[11px] text-neutral-400">
+                Min: ${(minCpiForDuration(form.durationSec ?? 5) / 1_000_000).toFixed(3)}
+              </p>
             </div>
           </div>
 

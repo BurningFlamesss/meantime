@@ -20,7 +20,10 @@ export class ViewportTimer {
   onEarned: (() => void) | null = null;
   private earnedFired = false;
 
-  constructor(private readonly target: HTMLElement) {}
+  constructor(
+    private readonly target: HTMLElement,
+    readonly requiredDurationMs: number = MIN_VIEWABLE_MS,
+  ) {}
 
   start(): void {
     this.pageVisible = document.visibilityState === "visible";
@@ -68,7 +71,7 @@ export class ViewportTimer {
     }
     this.lastTick = this.activelyViewable ? now : null;
 
-    if (!this.earnedFired && this.accumulatedMs >= MIN_VIEWABLE_MS) {
+    if (!this.earnedFired && this.accumulatedMs >= this.requiredDurationMs) {
       this.earnedFired = true;
       this.onEarned?.();
     }
@@ -86,7 +89,7 @@ export class ViewportTimer {
   }
 
   get earned(): boolean {
-    return this.cumulativeMs >= MIN_VIEWABLE_MS;
+    return this.cumulativeMs >= this.requiredDurationMs;
   }
 
   destroy(): void {
