@@ -1,8 +1,15 @@
 import type { PlatformSelectorConfig } from "@meantime/shared";
 
+export type MountPosition = "after" | "before" | "append";
+
+export interface MountTarget {
+  element: HTMLElement;
+  position: MountPosition;
+}
+
 /**
  * Implement this interface to add a new AI platform. A minimal adapter is a
- * selector config plus three anchor-locator functions — well under 30 lines.
+ * selector config plus anchor-locator functions.
  */
 export interface PlatformAdapter {
   readonly platformId: string;
@@ -12,14 +19,18 @@ export interface PlatformAdapter {
   matches(hostname: string, pathname: string): boolean;
 
   /** Anchor under the user's just-submitted prompt bubble (primary position). */
-  getUserMessageActionSlot(latestMessageNode: HTMLElement): HTMLElement | null;
+  getUserMessageActionSlot(latestMessageNode: HTMLElement): MountTarget | HTMLElement | null;
   /** Anchor at the footer of the AI response block. */
-  getAiMessageFooterSlot(latestAiNode: HTMLElement): HTMLElement | null;
+  getAiMessageFooterSlot(latestAiNode: HTMLElement): MountTarget | HTMLElement | null;
   /** Anchor next to the "Thinking..." indicator. */
-  getThinkingSlot(): HTMLElement | null;
+  getThinkingSlot(): MountTarget | HTMLElement | null;
+  /** Anchor strictly above the prompt / composer box without layout shift. */
+  getAboveComposerSlot(): MountTarget | HTMLElement | null;
 
   /** Latest user message node, used as the primary injection anchor. */
   findLatestUserMessage(): HTMLElement | null;
+  /** Get unique message key/id to survive DOM node reuse across virtualized lists. */
+  getMessageKey(node: HTMLElement | null): string | HTMLElement | null;
   /** Latest AI message node (may still be streaming). */
   findLatestAiMessage(): HTMLElement | null;
 }
@@ -55,27 +66,47 @@ export abstract class BaseAdapter implements PlatformAdapter {
     return this.last(this.config.userMessageSelector);
   }
 
+  getMessageKey(node: HTMLElement | null): string | HTMLElement | null {
+    if (!node) return null;
+    return node.getAttribute("id") ?? node.getAttribute("data-message-id") ?? node;
+  }
+
   findLatestAiMessage(): HTMLElement | null {
     return this.last(this.config.aiMessageSelector);
   }
 
-  getUserMessageActionSlot(latestMessageNode: HTMLElement): HTMLElement | null {
-    // Default: append to the message node's own footer/action row if it has
-    // one, otherwise to the node itself. Adapters can refine.
-    return (
-      latestMessageNode.querySelector<HTMLElement>("[class*='action'], footer") ??
-      latestMessageNode
-    );
+  getUserMessageActionSlot(latestMessageNode: HTMLElement): MountTarget | HTMLElement | null {
+    const action = latestMessageNode.querySelector<HTMLElement>("[class*='action'], footer");
+    if (action) return { element: action, position: "after" };
+    return { element: latestMessageNode, position: "after" };
   }
 
-  getAiMessageFooterSlot(latestAiNode: HTMLElement): HTMLElement | null {
-    return (
-      latestAiNode.querySelector<HTMLElement>("[class*='action'], footer") ??
-      latestAiNode
-    );
+  getAiMessageFooterSlot(latestAiNode: HTMLElement): MountTarget | HTMLElement | null {
+    const action = latestAiNode.querySelector<HTMLElement>("[class*='action'], footer");
+    if (action) return { element: action, position: "after" };
+    return { element: latestAiNode, position: "after" };
   }
 
-  getThinkingSlot(): HTMLElement | null {
-    return this.qs(this.config.thinkingIndicatorSelector)?.parentElement ?? null;
+  getThinkingSlot(): MountTarget | HTMLElement | null {
+    const el = this.qs(this.config.thinkingIndicatorSelector);
+    if (!el) return null;
+    if (el instanceof HTMLButtonElement || el.tagName === "BUTTON") {
+      return { element: el.parentElement ?? el, position: "after" };
+    }
+    return { element: el, position: "after" };
+  }
+
+  getAboveComposerSlot(): MountTarget | HTMLElement | null {
+    const portal = this.qs<HTMLElement>("[data-above-composer-portal='true']");
+    if (portal) return { element: portal, position: "append" };
+    const input = this.qs<HTMLElement>(this.config.promptInputSelector);
+    if (!input) return null;
+    const form =
+      input.closest("form") ??
+      input.closest("[data-chatgpt-composer]") ??
+      input.parentElement?.parentElement ??
+      input.parentElement;
+    if (!form) return null;
+    return { element: form, position: "before" };
   }
 }

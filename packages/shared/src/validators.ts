@@ -18,7 +18,7 @@ export const impressionEventSchema = z.object({
   impressionId: z.string().uuid(),
   leaseToken: z.string().min(16).max(2048),
   platform: z.string().min(1).max(32),
-  placement: z.enum(["under_prompt", "thinking_indicator", "ai_footer"]),
+  placement: z.enum(["under_prompt", "above_composer", "thinking_indicator", "ai_footer"]),
   displayMode: z.enum(["wait_time_only", "persist_until_5s"]),
   submittedAt: z.number().int().positive(),
   aiWaitDurationMs: z.number().min(0).max(600_000),

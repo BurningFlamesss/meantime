@@ -79,7 +79,9 @@ class MeanTimeBackground {
         const identity = await storageGet<Identity | null>(STORAGE_KEYS.IDENTITY, null);
         if (!identity) return null;
         if (msg.platform) await storageSet(LAST_PLATFORM_KEY, msg.platform);
-        return takeAd(Date.now(), msg.platform);
+        const ad = await takeAd(Date.now(), msg.platform);
+        void this.prefetchIfNeeded(!ad);
+        return ad;
       }
       case "return_ad":
         if (msg.ad) await requeueAd(msg.ad);

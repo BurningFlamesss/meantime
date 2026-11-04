@@ -121,6 +121,7 @@ async function init(): Promise<void> {
     accountEmail.textContent = identity.email ?? identity.userId.slice(0, 8);
     void loadStatus();
     void loadBalance();
+    void chrome.runtime.sendMessage({ type: "prefetch_now" }).then(() => loadStatus()).catch(() => undefined);
   }
 
   authToggle.addEventListener("click", () => {
@@ -208,13 +209,16 @@ async function init(): Promise<void> {
       : { ...settings, enabled: false };
     await saveSettings({ enabled: settings.enabled, snoozedUntil: settings.snoozedUntil });
     renderPause();
+    if (settings.enabled) {
+      void chrome.runtime.sendMessage({ type: "prefetch_now" }).then(() => loadStatus()).catch(() => undefined);
+    }
   });
 
   pauseResume.addEventListener("click", async () => {
     settings = { ...settings, enabled: true, snoozedUntil: 0 };
     await saveSettings({ enabled: true, snoozedUntil: 0 });
     renderPause();
-    void chrome.runtime.sendMessage({ type: "prefetch_now" }).catch(() => undefined);
+    void chrome.runtime.sendMessage({ type: "prefetch_now" }).then(() => loadStatus()).catch(() => undefined);
   });
 
   pauseApply.addEventListener("click", async () => {
@@ -260,6 +264,9 @@ async function init(): Promise<void> {
           radio.checked = radio.value === settings.displayMode;
         }
         renderPause();
+    if (settings.enabled) {
+      void chrome.runtime.sendMessage({ type: "prefetch_now" }).then(() => loadStatus()).catch(() => undefined);
+    }
       });
     }
   });

@@ -24,6 +24,6 @@ export function resolveAdapter(hostname: string, pathname: string): PlatformAdap
 
 export function supportedHostPatterns(): string[] {
   return ADAPTERS.flatMap((a) =>
-    a.hostPatterns.map((h) => `*://*.${h}/*`),
+    a.hostPatterns.flatMap((h) => [`*://${h}/*`, `*://*.${h}/*`]),
   );
 }

@@ -23,16 +23,20 @@ export const PLATFORM_CONFIGS: Record<PlatformId, PlatformSelectorConfig> = {
   openai: {
     platformId: "openai",
     hostPatterns: ["chatgpt.com", "chat.openai.com"],
-    promptInputSelector: "#prompt-textarea, div.ProseMirror[contenteditable='true']",
+    promptInputSelector:
+      "div.ProseMirror[contenteditable='true'], div[data-composer-markdown], div[role='textbox'][contenteditable='true'], #prompt-textarea, [data-testid*='prompt-textarea'], div[contenteditable='true']",
     sendButtonSelector:
-      "button[data-testid='send-button'], button[aria-label='Send prompt']",
+      "button[data-testid*='send'], button[aria-label*='Send'], button[data-testid='fruitjuice-send-button'], button[data-testid='send-button'], form[data-chatgpt-composer] button[type='submit'], [data-composer-trailing-controls] button:last-child",
     thinkingIndicatorSelector:
-      "div[data-testid='thinking-indicator'], span:has(> .loading-shimmer)",
-    streamingContainerSelector: "div[data-message-author-role='assistant'] .markdown",
+      "div[data-testid='thinking-indicator'], button[aria-label*='Thought' i], button[aria-label*='Thinking' i], [data-component='thinking'], [data-state='thinking'], [data-testid*='reasoning'], div[class*='thinking' i], div[class*='thought' i], div[class*='reasoning' i], span:has(> .loading-shimmer)",
+    streamingContainerSelector:
+      ".DilRenderer-tB76Jj, [data-markdown-text-style='assistant-message'], [data-dil-message-id], [data-message-author-role='assistant'] .markdown, [data-testid*='assistant'] .markdown",
     generationCompleteSelector:
-      "button[data-testid='copy-turn-action-button']",
-    userMessageSelector: "div[data-message-author-role='user']",
-    aiMessageSelector: "div[data-message-author-role='assistant']",
+      "button[aria-label='Copy'], button[aria-label='Regenerate response'], [class*='turn-action-controls'], [class*='actionRow'], button[data-testid='copy-turn-action-button']",
+    userMessageSelector:
+      "[data-user-message-bubble='true'], [data-chatgpt-search-unit-key$=':user'], [data-content-search-unit-key$=':user'], [data-conversation-role='user'], [data-message-author-role='user'], [data-testid*='user-message'], [class*='user-message']",
+    aiMessageSelector:
+      "[data-markdown-text-style='assistant-message'], .DilRenderer-tB76Jj, [data-dil-message-id], [data-chatgpt-search-unit-key$=':assistant'], [data-content-search-unit-key$=':assistant'], [data-conversation-role='assistant'], [data-message-author-role='assistant'], [data-testid*='assistant']",
   },
   gemini: {
     platformId: "gemini",

@@ -18,6 +18,27 @@ const CSS = `
   isolation: isolate;
   transition: opacity .45s ease, transform .45s ease;
 }
+:host([data-placement="above_composer"]) .mt-wrap,
+.mt-wrap[data-placement="above_composer"] {
+  margin: 4px auto;
+  max-width: 768px;
+  width: calc(100% - 24px);
+}
+:host([data-placement="under_prompt"]) .mt-wrap,
+.mt-wrap[data-placement="under_prompt"] {
+  margin: 6px 0 6px auto;
+  max-width: 640px;
+}
+:host([data-placement="ai_footer"]) .mt-wrap,
+.mt-wrap[data-placement="ai_footer"] {
+  margin: 6px 0;
+  max-width: 640px;
+}
+:host([data-placement="thinking_indicator"]) .mt-wrap,
+.mt-wrap[data-placement="thinking_indicator"] {
+  margin: 6px 0;
+  max-width: 640px;
+}
 .mt-wrap.mt-fade { opacity: 0; transform: translateY(-4px); pointer-events: none; }
 .mt-badge {
   flex: none; font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
@@ -209,7 +230,11 @@ export class AdWidget {
     };
   }
 
-  mount(parent: HTMLElement): void {
+  mount(parent: HTMLElement, placement?: string): void {
+    if (placement) {
+      this.host.dataset.placement = placement;
+      this.wrap.dataset.placement = placement;
+    }
     parent.append(this.host);
     this.timer.start();
     this.hover.start();
@@ -232,7 +257,13 @@ export class AdWidget {
     this.disposed = true;
     this.timer.destroy();
     this.hover.destroy();
-    const remove = () => this.host.remove();
+    const remove = () => {
+      const parent = this.host.parentElement;
+      this.host.remove();
+      if (parent && parent.id === "meantime-above-composer-slot" && parent.childNodes.length === 0) {
+        parent.remove();
+      }
+    };
     if (earnedFade) {
       this.wrap.classList.add("mt-fade");
       setTimeout(remove, 700);

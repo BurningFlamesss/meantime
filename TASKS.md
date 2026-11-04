@@ -236,6 +236,18 @@ private beta · P2 = post-launch / polish
 - [x] Docker compose actually executed: Postgres 16, Redis 7, s3mock, and the
       real `laya-serve` run healthy; migrations, seed, and `pnpm smoke` (30/30)
       pass against the compose stack.
+- [x] Extension apex domain match patterns: Fixed content script match pattern
+      omission where `*://*.chatgpt.com/*` failed to match naked/apex domain
+      `https://chatgpt.com/c/*`. Added explicit apex patterns (`*://chatgpt.com/*`,
+      `*://claude.ai/*`, `*://grok.com/*`, `*://x.com/i/grok*`, etc.) to both
+      `apps/extension/entrypoints/content.ts` and `apps/extension/lib/adapters/registry.ts`.
+- [x] ChatGPT DOM resilience & fallback mount: Hardened selectors in `packages/shared/src/platforms.ts`
+      (removed tag restrictions on `[data-message-author-role='user']` and
+      `[data-message-author-role='assistant']`, expanded `sendButtonSelector` and
+      `promptInputSelector`), loosened trigger detection in `content.ts`, and added
+      a fallback mount to the composer container if the message turn isn't
+      immediately found. Proactively refilled cache on depleted `take_ad` calls
+      and popup opening.
 
 ---
 
@@ -411,9 +423,8 @@ raw IPs.
 - [x] Add `aria-label` to icon-only controls and Escape/outside-click menu close.
 - [ ] Add a focus trap for the menu.
 - [x] Add a first-run explainer and permissions rationale.
+- [x] Harden selector fallbacks and zero-layout-shift ad placements: "End of user prompt", "Above prompt box", "In the thinking bubble", and "End of AI prompt (below response)". Never mount inside composer form.
 - [ ] Add an options page for API base, frequency, and placement.
-- [ ] Add a "report this ad" control.
-- [ ] Harden selector fallbacks and log adapter breakage (locally only).
 - [x] Add an explicit "ads paused" indicator.
 - [x] Add a popup pause picker and "until browser restart" mode, matching the
       in-page menu.
