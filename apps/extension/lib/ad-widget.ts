@@ -1,20 +1,22 @@
 import type { PrefetchedAd } from "@meantime/shared";
 import { MIN_VIEWABLE_MS } from "@meantime/shared";
+import type { MountPosition, MountTarget } from "./adapters/base";
 import { ViewportTimer } from "./viewport-timer";
 import { HoverTracker } from "./hover-tracker";
 import { PAUSE_UNTIL_RESTART } from "./storage";
 
 const CSS = `
-:host { all: initial; color: CanvasText; }
+:host { all: initial; display: block; width: 100%; color: CanvasText; }
 * { box-sizing: border-box; }
 .mt-wrap {
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   display: flex; align-items: center; gap: 10px;
-  padding: 8px 12px; margin: 6px 0;
+  padding: 8px 12px; margin: 8px auto;
   border: 1px solid rgba(127,127,127,.25); border-radius: 10px;
   background: rgba(127,127,127,.07);
   color: inherit; font-size: 13px; line-height: 1.4;
-  max-width: 640px;
+  max-width: 768px;
+  width: 100%;
   isolation: isolate;
   transition: opacity .45s ease, transform .45s ease;
 }
@@ -26,18 +28,18 @@ const CSS = `
 }
 :host([data-placement="under_prompt"]) .mt-wrap,
 .mt-wrap[data-placement="under_prompt"] {
-  margin: 6px 0 6px auto;
-  max-width: 640px;
+  margin: 8px auto;
+  max-width: 768px;
 }
 :host([data-placement="ai_footer"]) .mt-wrap,
 .mt-wrap[data-placement="ai_footer"] {
-  margin: 6px 0;
-  max-width: 640px;
+  margin: 8px auto;
+  max-width: 768px;
 }
 :host([data-placement="thinking_indicator"]) .mt-wrap,
 .mt-wrap[data-placement="thinking_indicator"] {
-  margin: 6px 0;
-  max-width: 640px;
+  margin: 8px auto;
+  max-width: 768px;
 }
 .mt-wrap.mt-fade { opacity: 0; transform: translateY(-4px); pointer-events: none; }
 .mt-badge {
@@ -230,15 +232,43 @@ export class AdWidget {
     };
   }
 
-  mount(parent: HTMLElement, placement?: string): void {
+  mount(target: HTMLElement | MountTarget, placement?: string): void {
     if (placement) {
       this.host.dataset.placement = placement;
       this.wrap.dataset.placement = placement;
     }
-    parent.append(this.host);
+    const el = "element" in target ? target.element : target;
+    const pos: MountPosition = "position" in target ? target.position : "after";
+
+    if (pos === "before") {
+      el.before(this.host);
+    } else if (pos === "append") {
+      el.append(this.host);
+    } else {
+      el.after(this.host);
+    }
+
     this.timer.start();
     this.hover.start();
     this.animateProgress();
+  }
+
+  reanchor(target: HTMLElement | MountTarget): void {
+    if (this.disposed || !this.host) return;
+    const el = "element" in target ? target.element : target;
+    const pos: MountPosition = "position" in target ? target.position : "after";
+
+    if (pos === "after" && el.nextElementSibling === this.host) return;
+    if (pos === "before" && el.previousElementSibling === this.host) return;
+    if (pos === "append" && el.lastElementChild === this.host) return;
+
+    if (pos === "before") {
+      el.before(this.host);
+    } else if (pos === "append") {
+      el.append(this.host);
+    } else {
+      el.after(this.host);
+    }
   }
 
   private animateProgress(): void {

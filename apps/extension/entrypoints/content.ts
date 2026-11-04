@@ -7,7 +7,7 @@ import {
   type PohiSignals,
 } from "@meantime/shared";
 import { resolveAdapter } from "../lib/adapters/registry";
-import type { PlatformAdapter } from "../lib/adapters/base";
+import type { MountTarget, PlatformAdapter } from "../lib/adapters/base";
 import { AdWidget } from "../lib/ad-widget";
 import { PohiCollector } from "../lib/pohi";
 import {
@@ -64,6 +64,8 @@ class MeanTimeController {
   private composerWaitObserver: MutationObserver | null = null;
   private composerWaitTimer: number | null = null;
   private inFlight = false;
+  private preSubmitUserMsgKey: string | HTMLElement | null = null;
+  private reanchorObserver: MutationObserver | null = null;
 
   private activeWidget: AdWidget | null = null;
   private activeLease: {
@@ -198,6 +200,7 @@ class MeanTimeController {
     // render a new answer while settings/storage is still being read, and a
     // baseline captured afterwards would treat that answer as pre-existing.
     const initialUserNode = this.adapter.findLatestUserMessage();
+    this.preSubmitUserMsgKey = this.adapter.getMessageKey(initialUserNode);
     const initialAiNode = this.adapter.findLatestAiMessage();
     this.inFlight = true;
     try {
@@ -218,7 +221,6 @@ class MeanTimeController {
       const viewport = performance.now();
       const mountPoint = await this.waitForMountPoint(
         settings.placement,
-        initialUserNode,
         initialAiNode,
         2_500,
         viewport,
@@ -291,6 +293,7 @@ class MeanTimeController {
       };
 
       this.pohi.reset();
+      this.watchReanchor(settings.placement);
       this.armWatchdogs(widget);
       this.watchGeneration(widget, initialAiNode);
     } finally {
@@ -301,22 +304,21 @@ class MeanTimeController {
   /**
    * Resolve the placement with a short poll.
    * - "above_composer": ready immediately above the prompt box.
-   * - "under_prompt": waits for the newly sent user bubble.
+   * - "under_prompt": waits for the newly sent user bubble (keyed via getMessageKey).
    * - "thinking_indicator": waits for model reasoning / thinking block.
    * - "ai_footer": waits for the new AI message node.
    * Falls back safely to above the composer or under prompt (NEVER inside the prompt box).
    */
   private async waitForMountPoint(
     placement: Placement,
-    initialUserNode: HTMLElement | null,
     initialAiNode: HTMLElement | null,
     timeoutMs: number,
     startedAt: number,
-  ): Promise<HTMLElement | null> {
+  ): Promise<MountTarget | HTMLElement | null> {
     // 1. "above_composer" is ready immediately (no waiting for response)
     if (placement === "above_composer") {
       const slot = this.adapter.getAboveComposerSlot();
-      if (slot && slot.isConnected) return slot;
+      if (slot) return slot;
     }
 
     // 2. Poll for the specific placement target until timeout
@@ -324,14 +326,15 @@ class MeanTimeController {
     while (performance.now() < deadline) {
       if (placement === "under_prompt") {
         const latest = this.adapter.findLatestUserMessage();
-        const isNew = initialUserNode === null ? latest !== null : latest !== null && latest !== initialUserNode;
+        const key = this.adapter.getMessageKey(latest);
+        const isNew = this.preSubmitUserMsgKey === null ? latest !== null : key !== this.preSubmitUserMsgKey;
         if (isNew && latest) {
           const slot = this.adapter.getUserMessageActionSlot(latest);
-          if (slot && slot.isConnected) return slot;
+          if (slot) return slot;
         }
       } else if (placement === "thinking_indicator") {
         const thinking = this.adapter.getThinkingSlot();
-        if (thinking && thinking.isConnected) {
+        if (thinking) {
           return thinking;
         }
       } else if (placement === "ai_footer") {
@@ -339,7 +342,7 @@ class MeanTimeController {
         const isNewAi = initialAiNode === null ? latestAi !== null : latestAi !== null && latestAi !== initialAiNode;
         if (isNewAi && latestAi) {
           const slot = this.adapter.getAiMessageFooterSlot(latestAi);
-          if (slot && slot.isConnected) return slot;
+          if (slot) return slot;
         }
       }
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -350,25 +353,25 @@ class MeanTimeController {
     return this.fallbackMount(placement);
   }
 
-  private fallbackMount(requestedPlacement?: Placement): HTMLElement | null {
+  private fallbackMount(requestedPlacement?: Placement): MountTarget | HTMLElement | null {
     // If thinking indicator or AI footer was requested but didn't appear (e.g. non-reasoning model or slow response),
     // try to anchor under the latest user prompt
     if (requestedPlacement === "thinking_indicator" || requestedPlacement === "ai_footer") {
       const user = this.adapter.findLatestUserMessage();
       if (user) {
         const slot = this.adapter.getUserMessageActionSlot(user);
-        if (slot && slot.isConnected) return slot;
+        if (slot) return slot;
       }
     }
 
     // Clean above-composer slot outside the prompt form (NEVER inside form)
     const above = this.adapter.getAboveComposerSlot();
-    if (above && above.isConnected) return above;
+    if (above) return above;
 
     const user = this.adapter.findLatestUserMessage();
     if (user) {
       const slot = this.adapter.getUserMessageActionSlot(user);
-      if (slot && slot.isConnected) return slot;
+      if (slot) return slot;
     }
 
     return (
@@ -376,6 +379,32 @@ class MeanTimeController {
         "main, [data-app-shell-focus-area='main'], div[data-thread-user-message-navigation-content], .thread-scroll-container",
       ) ?? document.body
     );
+  }
+
+  /**
+   * Reassert anchor on SPA thread rebuilds or navigation (e.g. ChatGPT / to /c/<id>).
+   */
+  private watchReanchor(placement: Placement): void {
+    this.reanchorObserver?.disconnect();
+    this.reanchorObserver = new MutationObserver(() => {
+      if (!this.activeWidget || this.activeLease?.closed) return;
+      if (placement === "under_prompt") {
+        const latest = this.adapter.findLatestUserMessage();
+        if (latest) {
+          const slot = this.adapter.getUserMessageActionSlot(latest);
+          if (slot) this.activeWidget.reanchor(slot);
+        }
+      } else if (placement === "above_composer") {
+        const slot = this.adapter.getAboveComposerSlot();
+        if (slot) this.activeWidget.reanchor(slot);
+      }
+    });
+    this.reanchorObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
+  private stopWatchingReanchor(): void {
+    this.reanchorObserver?.disconnect();
+    this.reanchorObserver = null;
   }
 
   /* --------------------------- generation watch -------------------------- */
@@ -484,6 +513,8 @@ class MeanTimeController {
     lease.closed = true;
     this.teardownObserver();
     this.clearWatchdogs();
+    this.stopWatchingReanchor();
+    this.preSubmitUserMsgKey = null;
 
     const cumulativeVisibleMs = Math.min(MAX_EVENT_MS, Math.round(widget.timer.cumulativeMs));
     const earned = cumulativeVisibleMs >= MIN_VIEWABLE_MS;
