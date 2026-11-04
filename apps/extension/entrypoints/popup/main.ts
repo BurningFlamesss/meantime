@@ -42,6 +42,7 @@ async function init(): Promise<void> {
 
   const enabled = el<HTMLInputElement>("enabled");
   const placement = el<HTMLSelectElement>("placement");
+  const theme = el<HTMLSelectElement>("theme");
   const pauseBanner = el<HTMLElement>("pause-banner");
   const pauseDetail = el<HTMLElement>("pause-detail");
   const pauseResume = el<HTMLButtonElement>("pause-resume");
@@ -194,6 +195,7 @@ async function init(): Promise<void> {
 
   enabled.checked = settings.enabled;
   placement.value = settings.placement;
+  theme.value = settings.theme ?? "auto";
   for (const radio of displayModeRadios) {
     radio.checked = radio.value === settings.displayMode;
     radio.addEventListener("change", async () => {
@@ -239,6 +241,11 @@ async function init(): Promise<void> {
     await saveSettings({ placement: settings.placement });
   });
 
+  theme.addEventListener("change", async () => {
+    settings = { ...settings, theme: theme.value as ExtensionSettings["theme"] };
+    await saveSettings({ theme: settings.theme });
+  });
+
   introView.hidden = await storageGet<boolean>(STORAGE_KEYS.FIRST_RUN_SEEN, false);
   introDismiss.addEventListener("click", () => {
     introView.hidden = true;
@@ -260,6 +267,7 @@ async function init(): Promise<void> {
       void getSettings().then((next) => {
         settings = next;
         placement.value = settings.placement;
+        theme.value = settings.theme ?? "auto";
         for (const radio of displayModeRadios) {
           radio.checked = radio.value === settings.displayMode;
         }

@@ -2,6 +2,7 @@ import { AD_COPY_LIMITS, PLATFORM_IDS } from "./constants.js";
 
 export type DisplayMode = "wait_time_only" | "persist_until_5s";
 export type Placement = "under_prompt" | "above_composer" | "thinking_indicator" | "ai_footer";
+export type ThemePreference = "auto" | "light" | "dark";
 export type PayoutMethod = "paypal" | "stripe_connect" | "wise" | "usdc" | "usdt";
 export type TaskPlatform = "x" | "linkedin" | "reddit" | "chrome_web_store" | "other";
 export type TaskStatus = "pending" | "approved" | "rejected";

@@ -6,19 +6,19 @@ import { HoverTracker } from "./hover-tracker";
 import { PAUSE_UNTIL_RESTART } from "./storage";
 
 const CSS = `
-:host { all: initial; display: block; width: 100%; color: CanvasText; }
+:host { all: initial; display: block; width: 100%; }
 * { box-sizing: border-box; }
 .mt-wrap {
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   display: flex; align-items: center; gap: 10px;
-  padding: 8px 12px; margin: 8px auto;
-  border: 1px solid rgba(127,127,127,.25); border-radius: 10px;
-  background: rgba(127,127,127,.07);
-  color: inherit; font-size: 13px; line-height: 1.4;
+  padding: 10px 14px; margin: 8px auto;
+  border-radius: 10px;
+  font-size: 13px; line-height: 1.45;
   max-width: 768px;
   width: 100%;
+  box-sizing: border-box;
   isolation: isolate;
-  transition: opacity .45s ease, transform .45s ease;
+  transition: opacity .35s ease, transform .35s ease, background .2s ease, color .2s ease;
 }
 :host([data-placement="above_composer"]) .mt-wrap,
 .mt-wrap[data-placement="above_composer"] {
@@ -42,42 +42,139 @@ const CSS = `
   max-width: 768px;
 }
 .mt-wrap.mt-fade { opacity: 0; transform: translateY(-4px); pointer-events: none; }
+
 .mt-badge {
-  flex: none; font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
-  padding: 2px 6px; border-radius: 4px;
-  border: 1px solid rgba(127,127,127,.35); color: rgba(127,127,127,.9);
+  flex: none; font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+  padding: 2px 7px; border-radius: 5px;
 }
 .mt-main { flex: 1 1 auto; min-width: 0; }
 .mt-headline { font-weight: 600; font-size: 13px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mt-body { margin: 1px 0 0; opacity: .85; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.mt-body { margin: 2px 0 0; font-size: 12px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .mt-cta {
   flex: none; font-size: 12px; font-weight: 600; text-decoration: none;
-  padding: 5px 10px; border-radius: 7px;
-  border: 1px solid rgba(127,127,127,.4); color: inherit;
+  padding: 6px 12px; border-radius: 7px; cursor: pointer;
+  transition: background .15s ease, border-color .15s ease;
 }
-.mt-cta:hover { background: rgba(127,127,127,.15); }
 .mt-controls { flex: none; display: flex; align-items: center; gap: 4px; position: relative; }
 .mt-icon-btn {
   appearance: none; background: none; border: none; cursor: pointer;
-  color: rgba(127,127,127,.8); font-size: 13px; padding: 3px 5px; border-radius: 5px; line-height: 1;
+  font-size: 14px; padding: 4px 6px; border-radius: 6px; line-height: 1;
+  transition: background .15s ease, color .15s ease;
 }
-.mt-icon-btn:hover { background: rgba(127,127,127,.18); color: inherit; }
 .mt-menu {
   position: absolute; top: 100%; right: 0; z-index: 10; margin-top: 4px;
-  background: Canvas; color: CanvasText;
-  border: 1px solid rgba(127,127,127,.35); border-radius: 8px;
-  padding: 4px; min-width: 168px;
-  box-shadow: 0 6px 24px rgba(0,0,0,.25);
+  border-radius: 8px; padding: 4px; min-width: 172px;
 }
 .mt-menu button {
   display: block; width: 100%; text-align: left; border: none; background: none;
-  color: inherit; font-size: 12px; padding: 6px 8px; border-radius: 5px; cursor: pointer;
+  font-size: 12px; padding: 6px 8px; border-radius: 5px; cursor: pointer;
 }
-.mt-menu button:hover { background: rgba(127,127,127,.15); }
-.mt-progress { flex: none; width: 42px; height: 4px; border-radius: 2px; background: rgba(127,127,127,.25); overflow: hidden; }
-.mt-progress > i { display: block; height: 100%; width: 0%; background: currentColor; opacity: .7; }
-.mt-earned { flex: none; font-size: 11px; font-weight: 600; color: #2e9e5b; }
+.mt-progress { flex: none; width: 44px; height: 5px; border-radius: 3px; overflow: hidden; }
+.mt-progress > i { display: block; height: 100%; width: 0%; transition: width .1s linear; }
+.mt-earned { flex: none; font-size: 11px; font-weight: 700; }
 .mt-hidden { display: none; }
+
+/* ---------------- LIGHT THEME ---------------- */
+:host([data-theme="light"]) .mt-wrap,
+.mt-wrap.theme-light {
+  background: #ffffff;
+  color: #111827;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+}
+:host([data-theme="light"]) .mt-headline,
+.theme-light .mt-headline { color: #111827; }
+:host([data-theme="light"]) .mt-body,
+.theme-light .mt-body { color: #374151; }
+:host([data-theme="light"]) .mt-badge,
+.theme-light .mt-badge {
+  background: #f3f4f6;
+  border: 1px solid #d1d5db;
+  color: #4b5563;
+}
+:host([data-theme="light"]) .mt-cta,
+.theme-light .mt-cta {
+  background: #f9fafb;
+  border: 1px solid #d1d5db;
+  color: #111827;
+}
+:host([data-theme="light"]) .mt-cta:hover,
+.theme-light .mt-cta:hover {
+  background: #f3f4f6;
+  border-color: #9ca3af;
+}
+:host([data-theme="light"]) .mt-icon-btn,
+.theme-light .mt-icon-btn { color: #6b7280; }
+:host([data-theme="light"]) .mt-icon-btn:hover,
+.theme-light .mt-icon-btn:hover { background: #f3f4f6; color: #111827; }
+:host([data-theme="light"]) .mt-menu,
+.theme-light .mt-menu {
+  background: #ffffff;
+  color: #111827;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 10px 25px -5px rgba(0,0,0,.1), 0 8px 10px -6px rgba(0,0,0,.1);
+}
+:host([data-theme="light"]) .mt-menu button,
+.theme-light .mt-menu button { color: #111827; }
+:host([data-theme="light"]) .mt-menu button:hover,
+.theme-light .mt-menu button:hover { background: #f3f4f6; }
+:host([data-theme="light"]) .mt-progress,
+.theme-light .mt-progress { background: #e5e7eb; }
+:host([data-theme="light"]) .mt-progress > i,
+.theme-light .mt-progress > i { background: #2563eb; }
+:host([data-theme="light"]) .mt-earned,
+.theme-light .mt-earned { color: #15803d; }
+
+/* ---------------- DARK THEME ---------------- */
+:host([data-theme="dark"]) .mt-wrap,
+.mt-wrap.theme-dark {
+  background: #202123;
+  color: #ececf1;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+:host([data-theme="dark"]) .mt-headline,
+.theme-dark .mt-headline { color: #ffffff; }
+:host([data-theme="dark"]) .mt-body,
+.theme-dark .mt-body { color: #d1d5db; }
+:host([data-theme="dark"]) .mt-badge,
+.theme-dark .mt-badge {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #e5e7eb;
+}
+:host([data-theme="dark"]) .mt-cta,
+.theme-dark .mt-cta {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  color: #ffffff;
+}
+:host([data-theme="dark"]) .mt-cta:hover,
+.theme-dark .mt-cta:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+:host([data-theme="dark"]) .mt-icon-btn,
+.theme-dark .mt-icon-btn { color: #9ca3af; }
+:host([data-theme="dark"]) .mt-icon-btn:hover,
+.theme-dark .mt-icon-btn:hover { background: rgba(255, 255, 255, 0.12); color: #ffffff; }
+:host([data-theme="dark"]) .mt-menu,
+.theme-dark .mt-menu {
+  background: #28292f;
+  color: #ececf1;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 10px 25px -5px rgba(0,0,0,.5);
+}
+:host([data-theme="dark"]) .mt-menu button,
+.theme-dark .mt-menu button { color: #ececf1; }
+:host([data-theme="dark"]) .mt-menu button:hover,
+.theme-dark .mt-menu button:hover { background: rgba(255, 255, 255, 0.1); }
+:host([data-theme="dark"]) .mt-progress,
+.theme-dark .mt-progress { background: rgba(255, 255, 255, 0.16); }
+:host([data-theme="dark"]) .mt-progress > i,
+.theme-dark .mt-progress > i { background: #3b82f6; }
+:host([data-theme="dark"]) .mt-earned,
+.theme-dark .mt-earned { color: #22c55e; }
 `;
 
 export interface WidgetCallbacks {
@@ -100,6 +197,7 @@ export class AdWidget {
   constructor(
     readonly ad: PrefetchedAd,
     private readonly callbacks: WidgetCallbacks,
+    initialTheme: "light" | "dark" = "dark",
   ) {
     this.host = document.createElement("div");
     this.host.dataset.meantime = "ad";
@@ -112,6 +210,7 @@ export class AdWidget {
     this.wrap.className = "mt-wrap";
     this.wrap.setAttribute("role", "complementary");
     this.wrap.setAttribute("aria-label", "Sponsored message");
+    this.setTheme(initialTheme);
 
     const badge = document.createElement("span");
     badge.className = "mt-badge";
@@ -232,10 +331,20 @@ export class AdWidget {
     };
   }
 
-  mount(target: HTMLElement | MountTarget, placement?: string): void {
+  setTheme(theme: "light" | "dark"): void {
+    this.host.dataset.theme = theme;
+    this.wrap.dataset.theme = theme;
+    this.wrap.classList.toggle("theme-dark", theme === "dark");
+    this.wrap.classList.toggle("theme-light", theme === "light");
+  }
+
+  mount(target: HTMLElement | MountTarget, placement?: string, theme?: "light" | "dark"): void {
     if (placement) {
       this.host.dataset.placement = placement;
       this.wrap.dataset.placement = placement;
+    }
+    if (theme) {
+      this.setTheme(theme);
     }
     const el = "element" in target ? target.element : target;
     const pos: MountPosition = "position" in target ? target.position : "after";

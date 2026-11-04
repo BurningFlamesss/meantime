@@ -1,4 +1,4 @@
-import type { DisplayMode, Placement } from "@meantime/shared";
+import type { DisplayMode, Placement, ThemePreference } from "@meantime/shared";
 
 /** Keys used in chrome.storage.local. */
 export const STORAGE_KEYS = {
@@ -15,6 +15,7 @@ export const STORAGE_KEYS = {
 export interface ExtensionSettings {
   displayMode: DisplayMode;
   placement: Placement;
+  theme: ThemePreference;
   /** Epoch ms until which all injection is paused; 0 = not paused. */
   snoozedUntil: number;
   enabled: boolean;
@@ -23,6 +24,7 @@ export interface ExtensionSettings {
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   displayMode: "persist_until_5s",
   placement: "under_prompt",
+  theme: "auto",
   snoozedUntil: 0,
   enabled: true,
 };

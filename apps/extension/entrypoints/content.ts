@@ -9,6 +9,7 @@ import {
 import { resolveAdapter } from "../lib/adapters/registry";
 import type { MountTarget, PlatformAdapter } from "../lib/adapters/base";
 import { AdWidget } from "../lib/ad-widget";
+import { observeSiteTheme, resolveWidgetTheme } from "../lib/theme";
 import { PohiCollector } from "../lib/pohi";
 import {
   getCachedSettings,
@@ -67,6 +68,7 @@ class MeanTimeController {
   private inFlight = false;
   private preSubmitUserMsgKey: string | HTMLElement | null = null;
   private reanchorObserver: MutationObserver | null = null;
+  private themeCleanup: (() => void) | null = null;
 
   private activeWidget: AdWidget | null = null;
   private activeLease: {
@@ -250,40 +252,55 @@ class MeanTimeController {
 
       const impressionId = uuidv4();
       const submittedAt = Date.now();
+      const resolvedTheme = resolveWidgetTheme(settings.theme);
 
-      const widget = new AdWidget(ad, {
-        onDismiss: (reason, snoozeMinutes) => {
-          this.finalize(reason);
-          if (reason === "snoozed" && typeof snoozeMinutes === "number") {
-            const until =
-              snoozeMinutes === PAUSE_UNTIL_RESTART
-                ? PAUSE_UNTIL_RESTART
-                : snoozeMinutes < 0
-                  ? Number.MAX_SAFE_INTEGER
-                  : Date.now() + snoozeMinutes * 60_000;
-            void saveSettings({ snoozedUntil: until });
-          }
+      const widget = new AdWidget(
+        ad,
+        {
+          onDismiss: (reason, snoozeMinutes) => {
+            this.finalize(reason);
+            if (reason === "snoozed" && typeof snoozeMinutes === "number") {
+              const until =
+                snoozeMinutes === PAUSE_UNTIL_RESTART
+                  ? PAUSE_UNTIL_RESTART
+                  : snoozeMinutes < 0
+                    ? Number.MAX_SAFE_INTEGER
+                    : Date.now() + snoozeMinutes * 60_000;
+              void saveSettings({ snoozedUntil: until });
+            }
+          },
+          onEarned: () => {
+            console.info("[MeanTime] 5s view verified — impression earned!");
+            this.finalize("earned");
+          },
+          onClickCta: () => {
+            void chrome.runtime
+              .sendMessage({ type: "ad_click", impressionId, leaseToken: ad.leaseToken })
+              .catch(() => undefined);
+          },
         },
-        onEarned: () => {
-          console.info("[MeanTime] 5s view verified — impression earned!");
-          this.finalize("earned");
-        },
-        onClickCta: () => {
-          void chrome.runtime
-            .sendMessage({ type: "ad_click", impressionId, leaseToken: ad.leaseToken })
-            .catch(() => undefined);
-        },
-      });
+        resolvedTheme,
+      );
 
       try {
-        widget.mount(mountPoint, settings.placement);
-        console.info("[MeanTime] Ad mounted successfully:", ad.headline, "at", settings.placement);
+        widget.mount(mountPoint, settings.placement, resolvedTheme);
+        console.info(
+          "[MeanTime] Ad mounted successfully:",
+          ad.headline,
+          "at",
+          settings.placement,
+          `(${resolvedTheme} theme)`,
+        );
       } catch (err) {
         console.error("[MeanTime] Error mounting ad widget:", err);
         widget.destroy(false);
         void chrome.runtime.sendMessage({ type: "return_ad", ad }).catch(() => undefined);
         return;
       }
+
+      this.themeCleanup = observeSiteTheme(settings.theme, (theme) => {
+        widget.setTheme(theme);
+      });
 
       this.activeWidget = widget;
       this.activeLease = {
@@ -565,6 +582,10 @@ class MeanTimeController {
     this.teardownObserver();
     this.clearWatchdogs();
     this.stopWatchingReanchor();
+    if (this.themeCleanup) {
+      this.themeCleanup();
+      this.themeCleanup = null;
+    }
     this.preSubmitUserMsgKey = null;
 
     const cumulativeVisibleMs = Math.min(MAX_EVENT_MS, Math.round(widget.timer.cumulativeMs));
