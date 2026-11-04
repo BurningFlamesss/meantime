@@ -84,7 +84,8 @@ export const users = pgTable(
     passwordHash: text("password_hash").notNull(),
     displayName: text("display_name"),
     country: text("country"),
-    signupIp: text("signup_ip"),
+    /** Salted SHA-256 of the signup IP for equality checks; raw IPs are never stored. */
+    signupIpHash: text("signup_ip_hash"),
     signupAsn: integer("signup_asn"),
     welcomeBonusCredited: boolean("welcome_bonus_credited").notNull().default(false),
     trustScore: integer("trust_score"),

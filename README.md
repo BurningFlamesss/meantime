@@ -15,6 +15,8 @@ prompt and the AI's response — with 55% of ad spend going to the user.
 ## Quickstart
 
 ```bash
+# Also runs `wxt prepare`, so the extension types exist before the first
+# typecheck or build — no separate setup step.
 pnpm install
 
 # 1. Local infrastructure: postgres, redis, s3mock (S3-compatible storage),
@@ -26,6 +28,7 @@ docker compose up -d
 cp apps/api/.env.example apps/api/.env
 pnpm db:migrate
 pnpm db:seed
+pnpm db:check   # asserts the double-entry ledger is zero-sum
 
 # 3. API (loads apps/api/.env automatically)
 pnpm --filter @meantime/api dev
@@ -191,10 +194,10 @@ The server resolves each request's IP to a coarse geo cluster (e.g.
 `NA-EAST`, `EU-WEST`) in memory and discards the IP — impressions and click
 events store only the cluster label. Advertisers target campaigns by cluster
 and see a per-cluster breakdown (unique users, views, verified views,
-intentional hovers, clicks, average retention). **The raw IP is never returned
-to the client and is not stored for impressions or clicks.** One legacy
-exception remains: `users.signup_ip` still stores the registration IP and is
-tracked for removal in `TASKS.md` (T-07).
+intentional hovers, clicks, average retention). **The raw IP is never persisted
+or returned**: `users.signup_ip_hash` holds a salted SHA-256 for self-referral
+and sybil equality checks, and impressions/clicks store only the cluster. No
+component reads, stores, or transmits prompt text.
 
 Hover is tracked only when intentional: a contiguous hover must last at least
 500ms before it accrues time, so the advertiser metric reflects real attention

@@ -48,7 +48,20 @@
       .toggle i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left .15s; }
       .toggle input:checked + i { background: #2e9e5b; }
       .toggle input:checked + i::after { left: 18px; }
-      #snooze-state { font-size: 11px; opacity: .7; margin-top: 6px; }
+      #pause-banner {
+        display: flex; align-items: center; gap: 10px;
+        border: 1px solid rgba(201,138,0,.55); border-radius: 8px;
+        padding: 9px 10px; margin: 0 0 12px;
+      }
+      #pause-banner b { display: block; color: #c98a00; font-size: 12px; }
+      #pause-banner p { margin: 2px 0 0; font-size: 11px; opacity: .75; line-height: 1.4; }
+      #pause-banner button.action { width: auto; flex: none; margin: 0; padding: 5px 9px; font-size: 12px; }
+      .intro { border: 1px solid rgba(127,127,127,.35); border-radius: 10px; padding: 12px; margin: 0 0 14px; }
+      .intro h2 { font-size: 13px; margin: 0 0 8px; }
+      .intro ul { margin: 0; padding-left: 16px; line-height: 1.5; }
+      .intro li { margin-bottom: 6px; }
+      .intro-perms { font-size: 11px; opacity: .7; line-height: 1.45; margin: 8px 0 0; }
+      .intro button.action { margin-top: 10px; }
       .error { color: #c0392b; font-size: 12px; margin: 8px 0 0; line-height: 1.4; }
       .auth-hint { font-size: 11px; opacity: .55; margin: 0 0 8px; }
       .server { margin-top: 12px; font-size: 12px; }
@@ -61,6 +74,36 @@
   <body>
     <h1>MeanTime</h1>
     <p class="sub">Micro-ads during AI wait time. You keep 55%.</p>
+
+    <section id="intro-view" class="intro" aria-labelledby="intro-title" hidden>
+      <h2 id="intro-title">How MeanTime works</h2>
+      <ul>
+        <li>
+          <b>A small, labelled text ad</b> appears under your prompt while the
+          AI answers. It never covers the page — keep typing, scrolling, and
+          clicking as usual.
+        </li>
+        <li>
+          <b>5 seconds of real view time</b> earns the view. The timer runs only
+          while the ad is on screen, the tab is visible, and the window is
+          focused; switch away and it pauses.
+        </li>
+        <li>
+          <b>You keep 55%</b> of what the advertiser pays, credited per verified
+          view.
+        </li>
+        <li>
+          <b>Your prompts stay private.</b> MeanTime never reads, stores, or
+          sends what you type.
+        </li>
+      </ul>
+      <p class="intro-perms">
+        Permissions: <b>storage</b> keeps your session, settings, and cached ads;
+        <b>alarms</b> syncs earnings; <b>idle</b> prefetches while you are away.
+        On AI sites it reads page structure only, to place the ad.
+      </p>
+      <button id="intro-dismiss" class="action" type="button">Got it</button>
+    </section>
 
     <section id="auth-view">
       <p class="auth-lead">
@@ -97,7 +140,13 @@
         <span><b>Ads enabled</b></span>
         <span class="toggle"><input type="checkbox" id="enabled" /><i></i></span>
       </div>
-      <div id="snooze-state"></div>
+      <div id="pause-banner" role="status" hidden>
+        <div>
+          <b>Ads paused</b>
+          <p id="pause-detail"></p>
+        </div>
+        <button id="pause-resume" class="action" type="button">Resume</button>
+      </div>
 
       <fieldset>
         <legend>Display mode</legend>

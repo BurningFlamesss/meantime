@@ -9,6 +9,7 @@ export const STORAGE_KEYS = {
   IDENTITY: "identity",
   POHI_SNAPSHOT: "pohi_snapshot",
   PROMPT_COUNTER: "prompt_counter",
+  FIRST_RUN_SEEN: "first_run_seen",
 } as const;
 
 export interface ExtensionSettings {
@@ -25,6 +26,33 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   snoozedUntil: 0,
   enabled: true,
 };
+
+/** `snoozedUntil` value meaning "paused until the user turns ads back on". */
+export const PAUSE_INDEFINITE = Number.MAX_SAFE_INTEGER;
+
+export interface PauseState {
+  paused: boolean;
+  /** True when the pause has no scheduled end. */
+  indefinite: boolean;
+  /** Epoch ms the pause lifts; 0 when not paused or paused indefinitely. */
+  resumesAt: number;
+}
+
+/**
+ * One reading of the pause state for the content script and the popup, so a
+ * snooze started from the in-page widget shows up as paused in the popup too.
+ * Negative legacy values are treated as indefinite, like the current sentinel.
+ */
+export function pauseState(settings: ExtensionSettings, now = Date.now()): PauseState {
+  if (!settings.enabled) return { paused: true, indefinite: true, resumesAt: 0 };
+  if (settings.snoozedUntil < 0 || settings.snoozedUntil >= PAUSE_INDEFINITE) {
+    return { paused: true, indefinite: true, resumesAt: 0 };
+  }
+  if (settings.snoozedUntil > now) {
+    return { paused: true, indefinite: false, resumesAt: settings.snoozedUntil };
+  }
+  return { paused: false, indefinite: false, resumesAt: 0 };
+}
 
 export interface Identity {
   userId: string;

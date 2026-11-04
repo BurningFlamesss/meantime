@@ -23,14 +23,22 @@ export async function computeTrustScore(db: Db, userId: string): Promise<TrustSc
   const ageDays = (Date.now() - user.createdAt.getTime()) / 86_400_000;
   const accountAgeScore = Math.min(20, Math.round((ageDays / 14) * 20));
 
-  // 2. Network: signup IP shared with other accounts is a sybil signal, and
-  //    implausible geo diversity over a short window is a bot-farm signal.
-  const sharedIp = await db
-    .select({ count: sql<number>`count(*)` })
-    .from(users)
-    .where(and(eq(users.signupIp, user.signupIp ?? ""), sql`${users.id} <> ${userId}`));
-  const sharedCount = Number(sharedIp[0]?.count ?? 0);
-  let networkScore = user.signupIp
+  // 2. Network: a signup IP hash shared with other accounts is a sybil signal,
+  //    and implausible geo diversity over a short window is a bot-farm signal.
+  //    Only the salted hash is stored, so this compares hashes, never IPs.
+  const sharedCount = user.signupIpHash
+    ? Number(
+        (
+          await db
+            .select({ count: sql<number>`count(*)` })
+            .from(users)
+            .where(
+              and(eq(users.signupIpHash, user.signupIpHash), sql`${users.id} <> ${userId}`),
+            )
+        )[0]?.count ?? 0,
+      )
+    : 0;
+  let networkScore = user.signupIpHash
     ? sharedCount === 0
       ? 20
       : sharedCount === 1

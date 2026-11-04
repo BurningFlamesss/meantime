@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, desc, eq, gt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import argon2 from "argon2";
 import { createHash } from "node:crypto";
 import {
@@ -85,9 +85,18 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext) {
 
     const passwordHash = await argon2.hash(body.password);
     const ip = req.ip;
+    // Resolve in memory at the edge and persist only the salted hash, so the
+    // sybil/self-referral equality checks keep working without a raw IP ever
+    // reaching the database.
+    const geo = resolveGeo(ip);
     const [user] = await ctx.db
       .insert(users)
-      .values({ email: body.email, passwordHash, displayName: body.displayName ?? null, signupIp: ip })
+      .values({
+        email: body.email,
+        passwordHash,
+        displayName: body.displayName ?? null,
+        signupIpHash: geo.ipHash,
+      })
       .returning();
     if (!user) return reply.code(500).send({ error: "create_failed" });
 
@@ -115,7 +124,7 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext) {
         .limit(1);
       const referrer = match[0];
       if (referrer && referrer.id !== user.id) {
-        const ipHash = resolveGeo(ip).ipHash;
+        const ipHash = geo.ipHash;
         const check = await checkReferralAllowed(ctx.db, {
           referrerId: referrer.id,
           referredIpHash: ipHash,
@@ -334,18 +343,35 @@ export async function adsRoutes(app: FastifyInstance, ctx: AppContext) {
       ? await ctx.db.select().from(devices).where(eq(devices.id, auth.deviceId)).limit(1)
       : [null];
 
+    const chosenCampaigns = eligible.slice(0, count);
+    // One query for every selected campaign's approved variants instead of an
+    // N+1 per campaign in the prefetch hot path.
+    const variantRows =
+      chosenCampaigns.length > 0
+        ? await ctx.db
+            .select()
+            .from(campaignVariants)
+            .where(
+              and(
+                inArray(
+                  campaignVariants.campaignId,
+                  chosenCampaigns.map((c) => c.id),
+                ),
+                eq(campaignVariants.moderationDecision, "auto_approved"),
+              ),
+            )
+        : [];
+    const variantsByCampaign = new Map<string, typeof variantRows>();
+    for (const variant of variantRows) {
+      const list = variantsByCampaign.get(variant.campaignId);
+      if (list) list.push(variant);
+      else variantsByCampaign.set(variant.campaignId, [variant]);
+    }
+
     const ads: PrefetchedAd[] = [];
-    for (const campaign of eligible.slice(0, count)) {
+    for (const campaign of chosenCampaigns) {
       // A/B rotation: pick the base copy or an approved variant at random.
-      const approvedVariants = await ctx.db
-        .select()
-        .from(campaignVariants)
-        .where(
-          and(
-            eq(campaignVariants.campaignId, campaign.id),
-            eq(campaignVariants.moderationDecision, "auto_approved"),
-          ),
-        );
+      const approvedVariants = variantsByCampaign.get(campaign.id) ?? [];
       const pick =
         approvedVariants.length > 0 && Math.random() < approvedVariants.length / (approvedVariants.length + 1)
           ? approvedVariants[Math.floor(Math.random() * approvedVariants.length)]

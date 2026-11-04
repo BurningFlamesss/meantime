@@ -375,8 +375,8 @@ store cluster + hash only; discard raw IP
 ```
 
 - `impressions.geoCluster` and `click_events.geoCluster` store labels.
-- `users.signupIp` currently stores the raw signup IP (legacy field — a privacy
-  gap to remove; see TASKS).
+- `users.signupIpHash` stores a salted SHA-256 of the signup IP for sybil and
+  self-referral equality checks; the raw IP is never persisted.
 - `user_network_events` stores hashed IP + cluster + day for trust scoring.
 - Fastify request logs redact `remoteAddress`, `remotePort`, `authorization`,
   and `cookie`; handlers still receive `req.ip` in memory for geo resolution.
@@ -625,7 +625,7 @@ erDiagram
 |---|---|---|
 | Prompt content | **Never** | — |
 | Chat history / AI responses | **Never** | — |
-| Raw IP | Only `users.signup_ip` (legacy gap) | Remove in a follow-up. |
+| Raw IP | **Never** | — |
 | IP equality signal | Yes | Salted SHA-256 hash + day. |
 | Location | Coarse cluster only | e.g. `NA-EAST`, `EU-WEST`. |
 | Device | Yes | User-scoped fingerprint hash; no raw browser fingerprint. |
@@ -638,6 +638,27 @@ erDiagram
 - The raw IP is resolved in memory at request time and never returned to the
   client.
 - Analytics expose cluster labels and counts only.
+
+### Retention
+
+v0.1 has no automated deletion job. Rows are kept while the demo ledger is
+reconciled: `ledger_entries` and payout rows indefinitely (accounting record),
+`impressions` / `fraud_logs` / `telemetry_batches` until an operator prunes
+them, signed task proofs in object storage until deleted, and every row except
+the ledger belongs to a user row with `ON DELETE CASCADE`. `pnpm db:check`
+asserts the ledger still sums to zero after any manual prune. A product-decided
+retention window and an account-deletion flow remain open in `TASKS.md`
+(PRIV-06).
+
+### `IP_HASH_SALT` rotation
+
+`IP_HASH_SALT` is mixed into every IP hash (`users.signup_ip_hash`,
+`user_network_events.ip_hash`, referral `referred_ip_hash`). Rotating it
+invalidates equality between old and new hashes: historical accounts stop
+matching a referral or a shared-signup-IP sybil check, and previously recorded
+network events can no longer be compared with new ones. Rotate it only with a
+clean cut-over (new salt for new rows, old rows expire with their retention
+window); the raw IPs cannot be re-hashed because they were never stored.
 
 ---
 
@@ -710,7 +731,7 @@ These are tracked as tasks in [TASKS.md](./TASKS.md).
    surface end to end; web and extension checks are still manual.
 4. CSRF protection is unnecessary for the bearer-only flow today; email
    verification and password reset are not implemented.
-5. `users.signupIp` stores a raw IP; it should be removed/hashed.
+5. ~~`users.signupIp` stores a raw IP.~~ Resolved: only a salted hash is stored.
 6. Prefetch performs an N+1 query for variants and loads all active campaigns
    before filtering in memory.
 7. Laya is a text model, so task-proof image contents are not interpreted;

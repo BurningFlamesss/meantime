@@ -1,6 +1,6 @@
 # MeanTime — Tasks and Roadmap
 
-**Last updated:** 2026-11-03 (verification run)  
+**Last updated:** 2026-11-04 (privacy, setup, and early-close pass)  
 **Status legend:** `[x]` done · `[~]` partial · `[ ]` not started · `[!]` blocked  
 **Priority:** P0 = required for a testable end-to-end demo · P1 = required for
 private beta · P2 = post-launch / polish
@@ -16,7 +16,7 @@ private beta · P2 = post-launch / polish
 | TanStack Start web app | `[x]` verified | Production SSR bundle serves all routes with 200. `/sign-up`, `/sign-in`, dashboard, sign-out, and sign-in-again passed 7/7 in Chromium. Advertiser sign-up/sign-in with rotating sessions, and `/r/:code` attribution. |
 | API smoke suite | `[x]` exists | `pnpm smoke` covers advertiser sessions, moderation, the 55% payment, and referral attribution + vesting. |
 | WXT extension | `[x]` verified | `.output/chrome-mv3` builds (185.5 KB; 94 KB content, 74 KB worker, 9 KB popup) and was loaded in real Chromium: first-run popup sign-up, prefetch, ad injection, 5 s payment, reload persistence, and sign-out all passed 19/19. |
-| Database migrations | `[x]` applied | `apps/api/drizzle/0000`–`0003`, 18 tables, applied to PostgreSQL 18. |
+| Database migrations | `[x]` applied | `apps/api/drizzle/0000`–`0005`, 18 tables, applied to PostgreSQL 18. |
 | Demo seed | `[x]` run | 1 advertiser + 2 active campaigns inserted. |
 | Docker compose | `[x]` verified | Postgres 16, Redis 7, s3mock and the Laya stub run healthy in compose; migrations + seed apply to it and `pnpm smoke` passes 19/19. The real Laya image build is still unverified. |
 | Laya moderation | `[x]` real model | The pinned upstream `v0.4.21` `laya-serve` was run from source with CPU torch and the English checkpoint on `:8000`. Clean copy → 92/`auto_approved`, crypto/prize scams → 0–36/`auto_rejected`, clean task link → `needs_review`. The Docker image itself is still unbuilt. |
@@ -196,6 +196,20 @@ private beta · P2 = post-launch / polish
       plus rejection of missing, non-image, and oversized objects.
 - [x] Fixed presigned PUTs carrying an empty-payload CRC32 checksum (which
       made real uploads fail) and allowed both loopback CORS spellings.
+- [x] Removed the last raw-IP column: `users.signup_ip` is now
+      `signup_ip_hash` (salt + SHA-256), and the trust score and referral check
+      compare hashes only.
+- [x] Added `pnpm db:check` (ledger reconciliation; exits non-zero unless the
+      double-entry books sum to zero) and documented it.
+- [x] Prefetch now loads all A/B variants for the selected campaigns in one
+      query instead of one query per campaign.
+- [x] Early-answer handling: in `persist_until_5s` (the default) an AI answer
+      that finishes before 5 s no longer tears the ad down early; only
+      `wait_time_only` closes with the wait.
+- [x] Extension popup: a one-time "How MeanTime works" explainer (what shows,
+      the 5 s rule, the 55% share, prompt privacy, and why each permission is
+      needed) plus an explicit "Ads paused" banner with a one-click resume that
+      reflects both the enable toggle and a snooze started in the page widget.
 - [ ] Docker compose actually executed (blocked: no Docker binary/root).
 
 ---
@@ -210,7 +224,7 @@ private beta · P2 = post-launch / polish
 - [x] Redirect to `/dashboard` after auth.
 - [x] Show signed-in state in the shell; add sign-out.
 - [x] Surface API errors inline (invalid credentials, email taken).
-- [ ] Capture `?ref=` / `/r/:code` into signup (T-04).
+- [x] Capture `?ref=` / `/r/:code` into signup (T-04).
 
 **Acceptance:** met — verified 7/7 in Chromium: sign-up lands on the dashboard
 with the $1.00 pending balance, sign-out clears the token, and sign-in restores
@@ -295,11 +309,13 @@ limit) is reported as `SKIP`, never as a pass.
 
 ### T-07 · Privacy cleanup
 
-- [ ] Remove or hash `users.signupIp`; migrate existing rows.
+- [x] Removed `users.signup_ip`; the signup IP is now stored only as a salted
+      SHA-256 (`users.signup_ip_hash`, migration `0005`) used for equality
+      checks. The referral overlap check and the trust score read the hash.
 - [x] Redact `req.remoteAddress`, `req.remotePort`, authorization, and cookie
       values from Fastify request logs.
-- [ ] Add a short data-retention section to the docs.
-- [ ] Document the `IP_HASH_SALT` rotation implications.
+- [x] Added a data-retention section to `ARCHITECTURE.md` §10.
+- [x] Documented `IP_HASH_SALT` rotation implications in `ARCHITECTURE.md` §10.
 
 **Acceptance:** a database dump contains no raw IP addresses and logs contain no
 raw IPs.
@@ -307,8 +323,10 @@ raw IPs.
 ### T-08 · Make `pnpm dev` reliable from a fresh clone
 
 - [x] Turbo `dev` builds shared first.
-- [ ] Add a root `postinstall` or documented `prepare` that runs `wxt prepare`.
-- [ ] Verify `pnpm dev` starts API + web without a prior manual build.
+- [x] Root `postinstall` runs `wxt prepare`, so a fresh `pnpm install` generates
+      the extension types with no extra step.
+- [ ] Verify `pnpm dev` starts API + web without a prior manual build (needs a
+      migrated database and `apps/api/.env`; not run in this pass).
 
 **Acceptance:** clean clone → `pnpm install` → `pnpm dev` works.
 
@@ -361,11 +379,11 @@ raw IPs.
 
 - [x] Add `aria-label` to icon-only controls and Escape/outside-click menu close.
 - [ ] Add a focus trap for the menu.
-- [ ] Add a first-run explainer and permissions rationale.
+- [x] Add a first-run explainer and permissions rationale.
 - [ ] Add an options page for API base, frequency, and placement.
 - [ ] Add a "report this ad" control.
 - [ ] Harden selector fallbacks and log adapter breakage (locally only).
-- [ ] Add an explicit "ads paused" indicator.
+- [x] Add an explicit "ads paused" indicator.
 - [ ] Add unit tests for `filterEligible`, `takeAd`, `ViewportTimer`, and
       `HoverTracker`.
 - [ ] Consider Firefox MV3 support (out of scope for v0.1).
@@ -435,10 +453,10 @@ separate token kind, plus a portal sign-in gate. | — | — |
 `/sign-up?ref=` and registration attributes the code. | — | — |
 | B-05 | ~~`POST /ads/click` parses the lease without verifying the HMAC.~~ Fixed: verifies the lease, requires a verified impression owned by the caller, and dedupes per impression. | — | — |
 | B-06 | ~~`persist()` extracts the lease id by re-parsing the token.~~ Fixed: the verified `lease.lid` is passed through. | — | — |
-| B-07 | `users.signupIp` stores a raw IP. | Privacy violation. | T-07. |
+| B-07 | ~~`users.signupIp` stores a raw IP.~~ Fixed: only a salted hash is stored (`signup_ip_hash`). | — | — |
 | B-08 | ~~Advertiser could activate a `needs_review` draft.~~ Fixed: `/activate` now returns `409 moderation_required` unless moderation was `auto_approved`. | No reviewer UI yet, so review-blocked campaigns stay off. | Build the reviewer queue. |
 | B-09 | No tests. | Regressions likely. | P1 testing. |
-| B-10 | `referralCodeFor` is duplicated in `auth-ads.ts` and `users-advertisers.ts`. | Divergence risk. | Move to `referrals.ts`. |
+| B-10 | ~~`referralCodeFor` is duplicated.~~ Fixed: one implementation in `referrals.ts`. | — | — |
 | B-11 | ~~Referrer lookup used `pgcrypto.digest`.~~ Fixed: uses core `sha256(convert_to(...))`. | — | — |
 | B-12 | `@meantime/shared` exports build output, so a fresh production start requires a build. | Confusing failure if run directly. | Documented; keep Turbo ordering. |
 | B-13 | No Docker available in the authoring environment. | Compose unverified. | Run T-05 on a Docker-capable machine. |

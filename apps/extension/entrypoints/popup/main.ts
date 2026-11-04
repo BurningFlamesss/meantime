@@ -3,9 +3,11 @@ import { WEB_BASE, apiFetch, getApiBase, setApiBase } from "../../lib/api-client
 import { authenticate, signOut, type AuthMode } from "../../lib/session";
 import {
   getSettings,
+  pauseState,
   saveSettings,
   STORAGE_KEYS,
   storageGet,
+  storageSet,
   type ExtensionSettings,
   type Identity,
 } from "../../lib/storage";
@@ -32,31 +34,36 @@ async function init(): Promise<void> {
   const apiBase = el<HTMLInputElement>("api-base");
   const saveServer = el<HTMLButtonElement>("save-server");
   const serverNote = el<HTMLElement>("server-note");
+  const introView = el<HTMLElement>("intro-view");
+  const introDismiss = el<HTMLButtonElement>("intro-dismiss");
   const accountEmail = el<HTMLElement>("account-email");
   const signOutButton = el<HTMLButtonElement>("sign-out");
 
   const enabled = el<HTMLInputElement>("enabled");
   const placement = el<HTMLSelectElement>("placement");
-  const snoozeState = el<HTMLElement>("snooze-state");
+  const pauseBanner = el<HTMLElement>("pause-banner");
+  const pauseDetail = el<HTMLElement>("pause-detail");
+  const pauseResume = el<HTMLButtonElement>("pause-resume");
+  const displayModeRadios = Array.from(
+    document.querySelectorAll<HTMLInputElement>("input[name='displayMode']"),
+  );
   const statBalance = el<HTMLElement>("stat-balance");
   const statCache = el<HTMLElement>("stat-cache");
   const statPending = el<HTMLElement>("stat-pending");
 
   apiBase.value = await getApiBase();
 
-  function renderSnooze(): void {
-    if (!settings.enabled) {
-      snoozeState.textContent = "";
-      return;
-    }
-    if (settings.snoozedUntil === Number.MAX_SAFE_INTEGER) {
-      snoozeState.textContent = "Paused until you turn it back on.";
-    } else if (settings.snoozedUntil > Date.now()) {
-      const mins = Math.ceil((settings.snoozedUntil - Date.now()) / 60_000);
-      snoozeState.textContent = `Paused — resumes in ~${mins} min.`;
-    } else {
-      snoozeState.textContent = "";
-    }
+  function renderPause(): void {
+    const state = pauseState(settings);
+    enabled.checked = settings.enabled;
+    pauseBanner.hidden = !state.paused;
+    if (!state.paused) return;
+    pauseDetail.textContent = state.indefinite
+      ? "No ads will show and nothing new will be earned."
+      : `Resumes in ~${Math.max(
+          1,
+          Math.ceil((state.resumesAt - Date.now()) / 60_000),
+        )} min.`;
   }
 
   function setAuthMode(mode: AuthMode): void {
@@ -181,9 +188,7 @@ async function init(): Promise<void> {
 
   enabled.checked = settings.enabled;
   placement.value = settings.placement;
-  for (const radio of document.querySelectorAll<HTMLInputElement>(
-    "input[name='displayMode']",
-  )) {
+  for (const radio of displayModeRadios) {
     radio.checked = radio.value === settings.displayMode;
     radio.addEventListener("change", async () => {
       if (!radio.checked) return;
@@ -193,13 +198,18 @@ async function init(): Promise<void> {
   }
 
   enabled.addEventListener("change", async () => {
-    settings = {
-      ...settings,
-      enabled: enabled.checked,
-      snoozedUntil: enabled.checked ? 0 : settings.snoozedUntil,
-    };
+    settings = enabled.checked
+      ? { ...settings, enabled: true, snoozedUntil: 0 }
+      : { ...settings, enabled: false };
     await saveSettings({ enabled: settings.enabled, snoozedUntil: settings.snoozedUntil });
-    renderSnooze();
+    renderPause();
+  });
+
+  pauseResume.addEventListener("click", async () => {
+    settings = { ...settings, enabled: true, snoozedUntil: 0 };
+    await saveSettings({ enabled: true, snoozedUntil: 0 });
+    renderPause();
+    void chrome.runtime.sendMessage({ type: "prefetch_now" }).catch(() => undefined);
   });
 
   placement.addEventListener("change", async () => {
@@ -207,12 +217,33 @@ async function init(): Promise<void> {
     await saveSettings({ placement: settings.placement });
   });
 
-  renderSnooze();
+  introView.hidden = await storageGet<boolean>(STORAGE_KEYS.FIRST_RUN_SEEN, false);
+  introDismiss.addEventListener("click", () => {
+    introView.hidden = true;
+    // Show it once per install; the popup stays the place to change settings.
+    void storageSet(STORAGE_KEYS.FIRST_RUN_SEEN, true);
+  });
+
+  renderPause();
   setAuthMode("login");
   await renderSession();
 
+  // A pause started in the in-page widget (or a timer running out) must show
+  // up here without reopening the popup.
+  setInterval(renderPause, 30_000);
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === "local" && changes[STORAGE_KEYS.IDENTITY]) void renderSession();
+    if (area !== "local") return;
+    if (changes[STORAGE_KEYS.IDENTITY]) void renderSession();
+    if (changes[STORAGE_KEYS.SETTINGS]) {
+      void getSettings().then((next) => {
+        settings = next;
+        placement.value = settings.placement;
+        for (const radio of displayModeRadios) {
+          radio.checked = radio.value === settings.displayMode;
+        }
+        renderPause();
+      });
+    }
   });
 
   el<HTMLButtonElement>("open-dashboard").addEventListener("click", () => {

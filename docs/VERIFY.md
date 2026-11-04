@@ -158,5 +158,11 @@ psql "$DATABASE_URL" -c 'select count(*) from impressions where geo_cluster is n
 ```
 
 Expected: `0` — impressions store only a coarse cluster. Raw IPs are not stored
-for impressions, clicks, or telemetry. One legacy exception remains
-(`users.signup_ip`, tracked as T-07 in `TASKS.md`).
+anywhere: `users.signup_ip_hash` holds a salted SHA-256 used only for equality
+checks, and telemetry/impressions/clicks carry the cluster label only. The
+following must return no rows:
+
+```bash
+psql "$DATABASE_URL" -c 'select column_name from information_schema.columns
+  where table_name = '\''users'\'' and column_name = '\''signup_ip'\'';'
+```

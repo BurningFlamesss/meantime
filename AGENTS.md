@@ -64,6 +64,7 @@ pnpm --filter @meantime/extension dev     # WXT dev
 pnpm db:generate                          # drizzle-kit generate
 pnpm db:migrate                           # apply migrations
 pnpm db:seed                              # demo advertiser + campaigns
+pnpm db:check                             # assert the double-entry ledger is zero-sum
 
 # Production-shaped local run
 pnpm --filter @meantime/api start
@@ -103,8 +104,7 @@ updates.
 4. **Prompt text is never read, stored, or transmitted.** PoHI may count trusted
    keystrokes/pastes but must not inspect values.
 5. **Raw IPs are never stored or returned.** Resolve to a coarse geo cluster in
-   memory; hash for equality checks only. (`users.signupIp` is a known legacy
-   violation — do not add more.)
+   memory; hash for equality checks only.
 6. **Every paid impression needs a valid, single-use HMAC lease.** Never trust a
    client-reported `earned` flag.
 7. **Money is integer micro-dollars** (`$1 = 1_000_000`). Never use floats for
@@ -336,7 +336,8 @@ before relying on the related flow:
   vesting); web and extension checks are still manual.
 - Task-proof image contents are not analysed by the text-only Laya model; only
   upload existence/type/size is validated, so approval still needs a human.
-- `users.signupIp` stores a raw IP (legacy).
+- Ledger reconciliation is a manual script (`pnpm db:check`), not a scheduled
+  alerting job.
 - Prefetch performs N+1 variant queries.
 - `@meantime/shared` must be built before production start.
 

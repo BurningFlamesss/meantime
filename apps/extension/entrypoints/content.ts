@@ -9,7 +9,14 @@ import { resolveAdapter } from "../lib/adapters/registry";
 import type { PlatformAdapter } from "../lib/adapters/base";
 import { AdWidget } from "../lib/ad-widget";
 import { PohiCollector } from "../lib/pohi";
-import { getSettings, saveSettings, STORAGE_KEYS, storageGet, uuidv4 } from "../lib/storage";
+import {
+  getSettings,
+  pauseState,
+  saveSettings,
+  STORAGE_KEYS,
+  storageGet,
+  uuidv4,
+} from "../lib/storage";
 import type { PromptCounter } from "../lib/storage";
 
 /** Schema cap on a single event's timings. Anything longer is clamped. */
@@ -181,8 +188,7 @@ class MeanTimeController {
     this.inFlight = true;
     try {
       const settings = await getSettings();
-      if (!settings.enabled) return;
-      if (settings.snoozedUntil === -1 || settings.snoozedUntil > Date.now()) return;
+      if (pauseState(settings).paused) return;
 
       // Layer-4 pacing, enforced client-side against the local counter; the
       // server re-checks authoritatively at prefetch/telemetry time.
@@ -343,7 +349,14 @@ class MeanTimeController {
       const complete = latest.matches(completeSelector) || latest.querySelector(completeSelector) !== null;
       if (complete) {
         this.teardownObserver();
-        if (this.activeWidget) this.finalize("stream_started");
+        // A fast model can finish before the 5 s threshold. In wait-time-only
+        // mode that ends the ad (nothing is owed for a wait that never
+        // happened). In persist mode the ad is already anchored and must stay
+        // until it earns, otherwise a <5 s answer would silently pay nothing
+        // while the user was still reading the ad.
+        if (this.activeLease?.displayMode === "wait_time_only" && this.activeWidget) {
+          this.finalize("stream_started");
+        }
       }
     };
 
@@ -357,12 +370,14 @@ class MeanTimeController {
     if (!this.activeLease || this.activeLease.closed) return;
 
     if (this.activeLease.displayMode === "wait_time_only") {
-      // Mode 1: instant removal the moment the AI starts streaming.
+      // Mode 1: instant removal the moment the AI starts streaming, even if
+      // the answer arrives before 5 s. The event still reports the real
+      // accrued time; the server rejects anything below the threshold.
       this.finalize("stream_started");
     } else if (widget.timer.cumulativeMs >= MIN_VIEWABLE_MS) {
       this.finalize("earned");
     }
-    // Mode 2 with < 5s accrued: keep the ad anchored; onEarned closes it.
+    // Mode 2 with < 5 s accrued: keep the ad anchored; onEarned closes it.
   }
 
   private teardownObserver(): void {
