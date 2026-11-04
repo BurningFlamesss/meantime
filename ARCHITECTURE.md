@@ -429,8 +429,8 @@ store cluster + hash only; discard raw IP
 | `lib/pohi.ts` | Trusted keystroke/paste counts only; never reads input value. |
 | `lib/telemetry-queue.ts` | Bounded local queue, batch builder, drain/restore on failure. |
 | `lib/api-client.ts` | Auth header injection, optional deflate compression, base URL resolution. |
-| `lib/storage.ts` | Typed `chrome.storage.local` helpers, settings defaults, UUIDv4. |
-| `entrypoints/popup/*` | Enable toggle, display mode, placement, cache/pending/balance stats. |
+| `lib/storage.ts` | Typed `chrome.storage.local` helpers, settings defaults, pause sentinels, UUIDv4. |
+| `entrypoints/popup/*` | Enable toggle, display mode, placement, pause picker (5/10/15/60 min, until restart, indefinite), cache/pending/balance stats, website/privacy/terms links. |
 
 ### 6.3 `apps/api`
 
@@ -463,6 +463,7 @@ store cluster + hash only; discard raw IP
 | `src/routes/referrals.tsx` | Referral link, copy button, stats. |
 | `src/routes/payouts.tsx` | Method/address form, threshold gating, trust result. |
 | `src/routes/advertiser.tsx` | Campaign form, geo chips, moderation panel, campaign table, analytics, A/B variants, geo table. |
+| `src/routes/privacy.tsx` / `terms.tsx` | Plain-language legal pages describing the data the stack actually stores and the earning/payout terms of this deployment. |
 | `src/lib/api.ts` | Fetch wrapper, bearer token from localStorage. |
 | `src/lib/shell.tsx` | Sticky header, nav, page header. |
 | `src/lib/ui.tsx` | `Stat`, `Badge`, `Empty`, `Table`. |

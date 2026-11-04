@@ -2,6 +2,7 @@ import type { PrefetchedAd } from "@meantime/shared";
 import { MIN_VIEWABLE_MS } from "@meantime/shared";
 import { ViewportTimer } from "./viewport-timer";
 import { HoverTracker } from "./hover-tracker";
+import { PAUSE_UNTIL_RESTART } from "./storage";
 
 const CSS = `
 :host { all: initial; color: CanvasText; }
@@ -154,9 +155,11 @@ export class AdWidget {
     this.menu.setAttribute("role", "menu");
     this.menu.setAttribute("aria-label", "Pause options");
     for (const [label, minutes] of [
+      ["Pause for 5 min", 5],
       ["Pause for 10 min", 10],
       ["Pause for 15 min", 15],
       ["Pause for 1 hour", 60],
+      ["Pause until browser restart", PAUSE_UNTIL_RESTART],
       ["Pause until I turn it back on", -1],
     ] as const) {
       const item = document.createElement("button");

@@ -14,10 +14,12 @@ import { Route as AdminRouteImport } from './routes/admin'
 import { Route as AdvertiserRouteImport } from './routes/advertiser'
 import { Route as DashboardRouteImport } from './routes/dashboard'
 import { Route as PayoutsRouteImport } from './routes/payouts'
+import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as ReferralsRouteImport } from './routes/referrals'
 import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as SignUpRouteImport } from './routes/sign-up'
 import { Route as TasksRouteImport } from './routes/tasks'
+import { Route as TermsRouteImport } from './routes/terms'
 import { Route as RCodeRouteImport } from './routes/r.$code'
 
 const IndexRoute = IndexRouteImport.update({
@@ -45,6 +47,11 @@ const PayoutsRoute = PayoutsRouteImport.update({
   path: '/payouts',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PrivacyRoute = PrivacyRouteImport.update({
+  id: '/privacy',
+  path: '/privacy',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ReferralsRoute = ReferralsRouteImport.update({
   id: '/referrals',
   path: '/referrals',
@@ -65,6 +72,11 @@ const TasksRoute = TasksRouteImport.update({
   path: '/tasks',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TermsRoute = TermsRouteImport.update({
+  id: '/terms',
+  path: '/terms',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const RCodeRoute = RCodeRouteImport.update({
   id: '/r/$code',
   path: '/r/$code',
@@ -77,10 +89,12 @@ export interface FileRoutesByFullPath {
   '/advertiser': typeof AdvertiserRoute
   '/dashboard': typeof DashboardRoute
   '/payouts': typeof PayoutsRoute
+  '/privacy': typeof PrivacyRoute
   '/referrals': typeof ReferralsRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/tasks': typeof TasksRoute
+  '/terms': typeof TermsRoute
   '/r/$code': typeof RCodeRoute
 }
 export interface FileRoutesByTo {
@@ -89,10 +103,12 @@ export interface FileRoutesByTo {
   '/advertiser': typeof AdvertiserRoute
   '/dashboard': typeof DashboardRoute
   '/payouts': typeof PayoutsRoute
+  '/privacy': typeof PrivacyRoute
   '/referrals': typeof ReferralsRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/tasks': typeof TasksRoute
+  '/terms': typeof TermsRoute
   '/r/$code': typeof RCodeRoute
 }
 export interface FileRoutesById {
@@ -102,10 +118,12 @@ export interface FileRoutesById {
   '/advertiser': typeof AdvertiserRoute
   '/dashboard': typeof DashboardRoute
   '/payouts': typeof PayoutsRoute
+  '/privacy': typeof PrivacyRoute
   '/referrals': typeof ReferralsRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
   '/tasks': typeof TasksRoute
+  '/terms': typeof TermsRoute
   '/r/$code': typeof RCodeRoute
 }
 export interface FileRouteTypes {
@@ -116,10 +134,12 @@ export interface FileRouteTypes {
     | '/advertiser'
     | '/dashboard'
     | '/payouts'
+    | '/privacy'
     | '/referrals'
     | '/sign-in'
     | '/sign-up'
     | '/tasks'
+    | '/terms'
     | '/r/$code'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -128,10 +148,12 @@ export interface FileRouteTypes {
     | '/advertiser'
     | '/dashboard'
     | '/payouts'
+    | '/privacy'
     | '/referrals'
     | '/sign-in'
     | '/sign-up'
     | '/tasks'
+    | '/terms'
     | '/r/$code'
   id:
     | '__root__'
@@ -140,10 +162,12 @@ export interface FileRouteTypes {
     | '/advertiser'
     | '/dashboard'
     | '/payouts'
+    | '/privacy'
     | '/referrals'
     | '/sign-in'
     | '/sign-up'
     | '/tasks'
+    | '/terms'
     | '/r/$code'
   fileRoutesById: FileRoutesById
 }
@@ -153,10 +177,12 @@ export interface RootRouteChildren {
   AdvertiserRoute: typeof AdvertiserRoute
   DashboardRoute: typeof DashboardRoute
   PayoutsRoute: typeof PayoutsRoute
+  PrivacyRoute: typeof PrivacyRoute
   ReferralsRoute: typeof ReferralsRoute
   SignInRoute: typeof SignInRoute
   SignUpRoute: typeof SignUpRoute
   TasksRoute: typeof TasksRoute
+  TermsRoute: typeof TermsRoute
   RCodeRoute: typeof RCodeRoute
 }
 
@@ -197,6 +223,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PayoutsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/privacy': {
+      id: '/privacy'
+      path: '/privacy'
+      fullPath: '/privacy'
+      preLoaderRoute: typeof PrivacyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/referrals': {
       id: '/referrals'
       path: '/referrals'
@@ -225,6 +258,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TasksRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/terms': {
+      id: '/terms'
+      path: '/terms'
+      fullPath: '/terms'
+      preLoaderRoute: typeof TermsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/r/$code': {
       id: '/r/$code'
       path: '/r/$code'
@@ -241,10 +281,12 @@ const rootRouteChildren: RootRouteChildren = {
   AdvertiserRoute: AdvertiserRoute,
   DashboardRoute: DashboardRoute,
   PayoutsRoute: PayoutsRoute,
+  PrivacyRoute: PrivacyRoute,
   ReferralsRoute: ReferralsRoute,
   SignInRoute: SignInRoute,
   SignUpRoute: SignUpRoute,
   TasksRoute: TasksRoute,
+  TermsRoute: TermsRoute,
   RCodeRoute: RCodeRoute,
 }
 export const routeTree = rootRouteImport

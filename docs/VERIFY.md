@@ -164,8 +164,9 @@ pnpm --filter @meantime/web build && pnpm --filter @meantime/web start
 
 Check: `/` 200, `/sign-up` renders and creates an account, `/sign-in` restores
 it, `/dashboard` shows the balance, `/r/<code>` redirects to
-`/sign-up?ref=<code>`, and `/advertiser` asks for advertiser credentials before
-showing campaign tools.
+`/sign-up?ref=<code>`, `/advertiser` asks for advertiser credentials before
+showing campaign tools, and `/privacy` and `/terms` render with the footer
+links working.
 
 ## 7. Extension
 
@@ -178,6 +179,13 @@ Load `apps/extension/.output/chrome-mv3` unpacked, click the toolbar icon, and
 create an account in the popup. Submit a prompt on a supported AI site: one
 labelled ad appears under the prompt, the 5-second progress bar completes, and
 the balance increases. Signing out clears the cache and stops ads.
+
+Check the pause paths: the in-page ⏸ menu and the popup picker both offer 5,
+10, 15, and 60 minutes, "until the browser restarts", and "until I turn ads
+back on". A timed pause shows a countdown in the popup and resumes on its own;
+the restart pause survives a tab reload but is cleared when Chromium itself is
+restarted. The popup footer opens the website, `/privacy`, and `/terms` in new
+tabs.
 
 ## 8. Money invariants
 

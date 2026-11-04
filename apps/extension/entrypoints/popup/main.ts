@@ -3,6 +3,7 @@ import { WEB_BASE, apiFetch, getApiBase, setApiBase } from "../../lib/api-client
 import { authenticate, signOut, type AuthMode } from "../../lib/session";
 import {
   getSettings,
+  PAUSE_UNTIL_RESTART,
   pauseState,
   saveSettings,
   STORAGE_KEYS,
@@ -44,6 +45,8 @@ async function init(): Promise<void> {
   const pauseBanner = el<HTMLElement>("pause-banner");
   const pauseDetail = el<HTMLElement>("pause-detail");
   const pauseResume = el<HTMLButtonElement>("pause-resume");
+  const pauseDuration = el<HTMLSelectElement>("pause-duration");
+  const pauseApply = el<HTMLButtonElement>("pause-apply");
   const displayModeRadios = Array.from(
     document.querySelectorAll<HTMLInputElement>("input[name='displayMode']"),
   );
@@ -58,12 +61,14 @@ async function init(): Promise<void> {
     enabled.checked = settings.enabled;
     pauseBanner.hidden = !state.paused;
     if (!state.paused) return;
-    pauseDetail.textContent = state.indefinite
-      ? "No ads will show and nothing new will be earned."
-      : `Resumes in ~${Math.max(
-          1,
-          Math.ceil((state.resumesAt - Date.now()) / 60_000),
-        )} min.`;
+    pauseDetail.textContent = state.untilRestart
+      ? "No ads will show until you restart the browser."
+      : state.indefinite
+        ? "No ads will show and nothing new will be earned."
+        : `Resumes in ~${Math.max(
+            1,
+            Math.ceil((state.resumesAt - Date.now()) / 60_000),
+          )} min.`;
   }
 
   function setAuthMode(mode: AuthMode): void {
@@ -212,6 +217,19 @@ async function init(): Promise<void> {
     void chrome.runtime.sendMessage({ type: "prefetch_now" }).catch(() => undefined);
   });
 
+  pauseApply.addEventListener("click", async () => {
+    const choice = pauseDuration.value;
+    const snoozedUntil =
+      choice === "restart"
+        ? PAUSE_UNTIL_RESTART
+        : choice === "indefinite"
+          ? Number.MAX_SAFE_INTEGER
+          : Date.now() + Number(choice) * 60_000;
+    settings = { ...settings, enabled: true, snoozedUntil };
+    await saveSettings({ enabled: true, snoozedUntil });
+    renderPause();
+  });
+
   placement.addEventListener("change", async () => {
     settings = { ...settings, placement: placement.value as ExtensionSettings["placement"] };
     await saveSettings({ placement: settings.placement });
@@ -248,6 +266,15 @@ async function init(): Promise<void> {
 
   el<HTMLButtonElement>("open-dashboard").addEventListener("click", () => {
     void chrome.tabs.create({ url: `${WEB_BASE}/dashboard` });
+  });
+  el<HTMLButtonElement>("open-site").addEventListener("click", () => {
+    void chrome.tabs.create({ url: WEB_BASE });
+  });
+  el<HTMLButtonElement>("open-privacy").addEventListener("click", () => {
+    void chrome.tabs.create({ url: `${WEB_BASE}/privacy` });
+  });
+  el<HTMLButtonElement>("open-terms").addEventListener("click", () => {
+    void chrome.tabs.create({ url: `${WEB_BASE}/terms` });
   });
 }
 

@@ -30,28 +30,48 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
 /** `snoozedUntil` value meaning "paused until the user turns ads back on". */
 export const PAUSE_INDEFINITE = Number.MAX_SAFE_INTEGER;
 
+/**
+ * `snoozedUntil` value meaning "paused until the browser restarts". The
+ * service worker clears it on startup; unlike the epoch form it survives tab
+ * reloads and navigation, which is what a "not right now" pause should do.
+ */
+export const PAUSE_UNTIL_RESTART = -2;
+
 export interface PauseState {
   paused: boolean;
   /** True when the pause has no scheduled end. */
   indefinite: boolean;
+  /** True when the pause lifts on the next browser restart. */
+  untilRestart: boolean;
   /** Epoch ms the pause lifts; 0 when not paused or paused indefinitely. */
   resumesAt: number;
 }
 
 /**
  * One reading of the pause state for the content script and the popup, so a
- * snooze started from the in-page widget shows up as paused in the popup too.
- * Negative legacy values are treated as indefinite, like the current sentinel.
+ * snooze started from the in-page widget shows up in the popup too.
+ * `PAUSE_UNTIL_RESTART` is distinct from the legacy negative values, which
+ * still mean indefinite.
  */
 export function pauseState(settings: ExtensionSettings, now = Date.now()): PauseState {
-  if (!settings.enabled) return { paused: true, indefinite: true, resumesAt: 0 };
+  if (!settings.enabled) {
+    return { paused: true, indefinite: true, untilRestart: false, resumesAt: 0 };
+  }
+  if (settings.snoozedUntil === PAUSE_UNTIL_RESTART) {
+    return { paused: true, indefinite: false, untilRestart: true, resumesAt: 0 };
+  }
   if (settings.snoozedUntil < 0 || settings.snoozedUntil >= PAUSE_INDEFINITE) {
-    return { paused: true, indefinite: true, resumesAt: 0 };
+    return { paused: true, indefinite: true, untilRestart: false, resumesAt: 0 };
   }
   if (settings.snoozedUntil > now) {
-    return { paused: true, indefinite: false, resumesAt: settings.snoozedUntil };
+    return {
+      paused: true,
+      indefinite: false,
+      untilRestart: false,
+      resumesAt: settings.snoozedUntil,
+    };
   }
-  return { paused: false, indefinite: false, resumesAt: 0 };
+  return { paused: false, indefinite: false, untilRestart: false, resumesAt: 0 };
 }
 
 export interface Identity {

@@ -89,12 +89,14 @@ minutes — is reported as `SKIP`, not as a pass.
    per view.
 
 **Device footprint.** No model ships to the browser — Laya runs entirely on the
-API host. The full MV3 bundle is ~186 KB (94 KB content script, 74 KB service
-worker, 9 KB popup); the popup is only loaded when opened. The cache is capped
+API host. The full MV3 bundle is ~191 KB (95 KB content script, 75 KB service
+worker, 11 KB popup); the popup is only loaded when opened. The cache is capped
 at 25 ads, telemetry at 200 events, and the viewport `requestAnimationFrame`
 loop stops whenever the ad is not actively visible. Ads appear only after a
-prompt is sent, one per tab, and can be dismissed, snoozed, or switched off;
-a signed-out install never shows cached ads.
+prompt is sent, one per tab, and can be dismissed, snoozed for 5, 10, 15, or 60
+minutes, paused until the browser restarts, or switched off; a signed-out
+install never shows cached ads. The popup links to the website, privacy policy,
+and terms.
 
 ## Anti-fraud layers
 

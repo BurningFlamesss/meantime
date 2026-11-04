@@ -11,6 +11,7 @@ import { AdWidget } from "../lib/ad-widget";
 import { PohiCollector } from "../lib/pohi";
 import {
   getSettings,
+  PAUSE_UNTIL_RESTART,
   pauseState,
   saveSettings,
   STORAGE_KEYS,
@@ -225,7 +226,11 @@ class MeanTimeController {
           this.finalize(reason);
           if (reason === "snoozed" && typeof snoozeMinutes === "number") {
             const until =
-              snoozeMinutes < 0 ? Number.MAX_SAFE_INTEGER : Date.now() + snoozeMinutes * 60_000;
+              snoozeMinutes === PAUSE_UNTIL_RESTART
+                ? PAUSE_UNTIL_RESTART
+                : snoozeMinutes < 0
+                  ? Number.MAX_SAFE_INTEGER
+                  : Date.now() + snoozeMinutes * 60_000;
             void saveSettings({ snoozedUntil: until });
           }
         },

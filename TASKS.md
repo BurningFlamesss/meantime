@@ -1,6 +1,6 @@
 # MeanTime — Tasks and Roadmap
 
-**Last updated:** 2026-11-04 (multilingual + labelled-benchmark pass)  
+**Last updated:** 2026-11-04 (multilingual + labelled-benchmark pass; pause modes + legal pages)  
 **Status legend:** `[x]` done · `[~]` partial · `[ ]` not started · `[!]` blocked  
 **Priority:** P0 = required for a testable end-to-end demo · P1 = required for
 private beta · P2 = post-launch / polish
@@ -226,6 +226,13 @@ private beta · P2 = post-launch / polish
       the 5 s rule, the 55% share, prompt privacy, and why each permission is
       needed) plus an explicit "Ads paused" banner with a one-click resume that
       reflects both the enable toggle and a snooze started in the page widget.
+- [x] Pause durations: 5, 10, 15, and 60 minutes, until the browser restarts,
+      or until re-enabled — from both the in-page menu and the popup. The
+      "until restart" sentinel (`-2`) is cleared by the service worker on
+      `onStartup`/`onInstalled`, so it does not survive a browser relaunch.
+- [x] `/privacy` and `/terms` web routes, linked from the landing footer, the
+      signed-in shell footer, and the extension popup (which also links to the
+      website and the earnings dashboard).
 - [x] Docker compose actually executed: Postgres 16, Redis 7, s3mock, and the
       real `laya-serve` run healthy; migrations, seed, and `pnpm smoke` (30/30)
       pass against the compose stack.
@@ -408,6 +415,9 @@ raw IPs.
 - [ ] Add a "report this ad" control.
 - [ ] Harden selector fallbacks and log adapter breakage (locally only).
 - [x] Add an explicit "ads paused" indicator.
+- [x] Add a popup pause picker and "until browser restart" mode, matching the
+      in-page menu.
+- [x] Add popup quick links to the website, privacy policy, and terms.
 - [ ] Add unit tests for `filterEligible`, `takeAd`, `ViewportTimer`, and
       `HoverTracker`.
 - [ ] Consider Firefox MV3 support (out of scope for v0.1).

@@ -35,6 +35,7 @@
         cursor: pointer; padding: 8px 0 0; font-size: 12px;
       }
       button.link:hover { opacity: 1; }
+      .links { margin-top: 10px; border-top: 1px solid rgba(127,127,127,.2); padding-top: 2px; }
       .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
       .account { border-bottom: 1px solid rgba(127,127,127,.2); padding-bottom: 8px; }
       .account-email { font-weight: 600; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -149,6 +150,19 @@
       </div>
 
       <fieldset>
+        <legend>Pause ads</legend>
+        <select id="pause-duration">
+          <option value="5">5 minutes</option>
+          <option value="10">10 minutes</option>
+          <option value="15">15 minutes</option>
+          <option value="60">1 hour</option>
+          <option value="restart">Until the browser restarts</option>
+          <option value="indefinite">Until I turn ads back on</option>
+        </select>
+        <button class="action" id="pause-apply" type="button">Pause ads</button>
+      </fieldset>
+
+      <fieldset>
         <legend>Display mode</legend>
         <label class="mode">
           <span class="mode-title">
@@ -191,6 +205,13 @@
 
       <button class="action" id="open-dashboard">Open earnings dashboard</button>
     </div>
+
+    <div class="links">
+      <button class="link" id="open-site" type="button">MeanTime website</button>
+      <button class="link" id="open-privacy" type="button">Privacy policy</button>
+      <button class="link" id="open-terms" type="button">Terms of service</button>
+    </div>
+
 
     <script type="module" src="./main.ts"></script>
   </body>

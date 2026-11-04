@@ -16,6 +16,9 @@ import {
   type QueuedImpression,
 } from "../lib/telemetry-queue";
 import {
+  getSettings,
+  PAUSE_UNTIL_RESTART,
+  saveSettings,
   STORAGE_KEYS,
   storageGet,
   storageSet,
@@ -51,8 +54,8 @@ class MeanTimeBackground {
       if (state === "idle") void this.prefetchIfNeeded();
     });
 
-    chrome.runtime.onInstalled.addListener(() => void this.prefetchIfNeeded(true));
-    chrome.runtime.onStartup.addListener(() => void this.prefetchIfNeeded(true));
+    chrome.runtime.onInstalled.addListener(() => void this.handleBrowserStart());
+    chrome.runtime.onStartup.addListener(() => void this.handleBrowserStart());
 
     chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       void this.handleMessage(msg)
@@ -111,6 +114,19 @@ class MeanTimeBackground {
       default:
         return null;
     }
+  }
+
+  /**
+   * A pause set to "until browser restart" is cleared when the browser starts
+   * again. The sentinel lives in local storage (content scripts and the popup
+   * both read it), so the service worker is the one place that retires it.
+   */
+  private async handleBrowserStart(): Promise<void> {
+    const settings = await getSettings();
+    if (settings.snoozedUntil === PAUSE_UNTIL_RESTART) {
+      await saveSettings({ snoozedUntil: 0 });
+    }
+    await this.prefetchIfNeeded(true);
   }
 
   /* ------------------------------ prefetching ---------------------------- */

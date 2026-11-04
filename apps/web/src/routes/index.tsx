@@ -76,9 +76,19 @@ function Landing() {
       </section>
 
       <footer className="border-t border-neutral-200 py-8">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 text-sm text-neutral-400">
-          <span>MeanTime</span>
-          <span>Ads in the meantime.</span>
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-6 text-sm text-neutral-400">
+          <span>MeanTime — ads in the meantime.</span>
+          <nav className="flex items-center gap-4">
+            <Link to="/privacy" className="hover:text-neutral-900">
+              Privacy
+            </Link>
+            <Link to="/terms" className="hover:text-neutral-900">
+              Terms
+            </Link>
+            <Link to="/sign-in" className="hover:text-neutral-900">
+              Sign in
+            </Link>
+          </nav>
         </div>
       </footer>
     </main>
