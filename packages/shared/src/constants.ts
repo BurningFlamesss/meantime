@@ -39,6 +39,18 @@ export function minCpiForDuration(durationSec: number): number {
 export const VIEWABILITY_THRESHOLD = 0.75;
 /** A hover only counts as intentional after this much continuous hover time. */
 export const HOVER_INTENT_MIN_MS = 500;
+/**
+ * Hard cap on how long a completed/streaming ad is held open while the pointer
+ * rests on it. The user asked the ad not to vanish under their cursor; this
+ * bounds that courtesy so a parked pointer cannot pin a lease forever.
+ */
+export const HOVER_HOLD_MAX_MS = 60_000;
+
+/** Human labels for the two ad slots, shared by popup and docs. */
+export const PLACEMENT_LABELS = {
+  thinking_indicator: "In the thinking bubble",
+  above_composer: "Above prompt box",
+} as const;
 
 /** Laya auto-moderation score bands (0–100). */
 export const LAYA = {

@@ -1,7 +1,13 @@
 import { AD_COPY_LIMITS, PLATFORM_IDS } from "./constants.js";
 
 export type DisplayMode = "wait_time_only" | "persist_until_5s";
-export type Placement = "under_prompt" | "above_composer" | "thinking_indicator" | "ai_footer";
+/**
+ * The two supported ad slots. `thinking_indicator` renders a full-width row in
+ * the conversation flow where the assistant's "thinking" bubble appears, just
+ * after the user's prompt. `above_composer` floats immediately above the
+ * prompt box. Both are chosen by the user in the popup.
+ */
+export type Placement = "thinking_indicator" | "above_composer";
 export type ThemePreference = "auto" | "light" | "dark";
 export type PayoutMethod = "paypal" | "stripe_connect" | "wise" | "usdc" | "usdt";
 export type TaskPlatform = "x" | "linkedin" | "reddit" | "chrome_web_store" | "other";
@@ -190,6 +196,10 @@ export interface CampaignAnalytics {
     verifiedViews: number;
     uniqueUsers: number;
     intentionalHovers: number;
+    /** Total milliseconds users deliberately hovered over the ad (intent-gated). */
+    totalHoverMs: number;
+    /** Mean intentional hover per impression, in milliseconds. */
+    avgHoverMs: number;
     clicks: number;
     ctr: number;
     avgRetentionMs: number;

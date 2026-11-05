@@ -33,6 +33,12 @@ function prune(now: number): void {
 export interface RateLimitResult {
   allowed: boolean;
   retryAfterSec: number;
+  /** Configured ceiling for this scope/window. */
+  limit: number;
+  /** Requests left in the current window (0 once exhausted). */
+  remaining: number;
+  /** Epoch ms when the window resets. */
+  resetAt: number;
 }
 
 export function checkRateLimit(
@@ -44,14 +50,27 @@ export function checkRateLimit(
   prune(now);
   const bucket = buckets.get(key);
   if (!bucket || bucket.resetAt <= now) {
-    buckets.set(key, { count: 1, resetAt: now + windowMs });
-    return { allowed: true, retryAfterSec: 0 };
+    const resetAt = now + windowMs;
+    buckets.set(key, { count: 1, resetAt });
+    return { allowed: true, retryAfterSec: 0, limit, remaining: Math.max(0, limit - 1), resetAt };
   }
   bucket.count += 1;
   if (bucket.count > limit) {
-    return { allowed: false, retryAfterSec: Math.max(1, Math.ceil((bucket.resetAt - now) / 1000)) };
+    return {
+      allowed: false,
+      retryAfterSec: Math.max(1, Math.ceil((bucket.resetAt - now) / 1000)),
+      limit,
+      remaining: 0,
+      resetAt: bucket.resetAt,
+    };
   }
-  return { allowed: true, retryAfterSec: 0 };
+  return {
+    allowed: true,
+    retryAfterSec: 0,
+    limit,
+    remaining: Math.max(0, limit - bucket.count),
+    resetAt: bucket.resetAt,
+  };
 }
 
 /**
@@ -68,6 +87,10 @@ export function rateLimit(
   subject?: string,
 ): boolean {
   const result = checkRateLimit(`${scope}:${subject ?? req.ip}`, limit, windowMs);
+  reply
+    .header("x-ratelimit-limit", String(result.limit))
+    .header("x-ratelimit-remaining", String(result.remaining))
+    .header("x-ratelimit-reset", String(Math.ceil(result.resetAt / 1000)));
   if (result.allowed) return true;
   void reply
     .code(429)

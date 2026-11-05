@@ -70,7 +70,16 @@ export async function adminRoutes(app: FastifyInstance, ctx: AppContext) {
           createdAt: campaigns.createdAt,
         })
         .from(campaigns)
-        .where(or(eq(campaigns.status, "draft"), eq(campaigns.moderationDecision, "needs_review")))
+        // Everything that is not auto-approved is visible to a reviewer,
+        // including auto-rejected copy. Advertisers never see a raw rejection
+        // as an error; the campaign waits here in the "Under review" section.
+        .where(
+          or(
+            eq(campaigns.status, "draft"),
+            eq(campaigns.moderationDecision, "needs_review"),
+            eq(campaigns.moderationDecision, "auto_rejected"),
+          ),
+        )
         .limit(50),
       ctx.db
         .select({

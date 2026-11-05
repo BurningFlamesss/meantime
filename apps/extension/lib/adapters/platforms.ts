@@ -208,10 +208,14 @@ export class GeminiAdapter extends BaseAdapter {
     return null;
   }
 
+  /**
+   * Angular reuses user-query components across turns, so a text based key can
+   * collide when the same prompt is sent twice. The element identity is stable
+   * within a turn and changes when a new turn mounts.
+   */
   override getMessageKey(node: HTMLElement | null): string | HTMLElement | null {
     if (!node) return null;
-    const text = node.textContent?.trim().slice(0, 40);
-    return node.getAttribute("id") ?? (text ? `g_${text}` : node);
+    return node.getAttribute("id") ?? node;
   }
 
   override findLatestUserMessage(): HTMLElement | null {
@@ -243,8 +247,33 @@ export class ClaudeAdapter extends BaseAdapter {
 
   override getThinkingSlot(): MountTarget | null {
     const user = this.findLatestUserMessage();
-    if (user) return this.getUserMessageActionSlot(user);
-    return null;
+    if (!user) return null;
+    const turn =
+      user.closest<HTMLElement>("[data-cds='UserMessage']")?.parentElement ??
+      user.closest<HTMLElement>("[data-testid='user-message']")?.parentElement ??
+      user.parentElement ??
+      user;
+    return { element: turn, position: "after" };
+  }
+
+  /**
+   * Claude's composer sits in a narrow column above the send row. Anchoring to
+   * the nearest positioned wrapper (rather than a bare textarea) keeps the
+   * overlay aligned with the input instead of floating over the sidebar.
+   */
+  override getAboveComposerSlot(): MountTarget | null {
+    const input = this.qs<HTMLElement>(this.config.promptInputSelector);
+    if (!input) return null;
+    const area =
+      input.closest<HTMLElement>("[data-testid='composer'], form, [data-testid*='composer'], .composer") ??
+      input.closest<HTMLElement>("fieldset") ??
+      input.parentElement?.parentElement ??
+      input.parentElement;
+    if (!area) return null;
+    if (getComputedStyle(area).position === "static") {
+      area.style.position = "relative";
+    }
+    return { element: area, position: "append" };
   }
 }
 

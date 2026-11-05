@@ -584,7 +584,7 @@ async function referralChecks(cpiMicro) {
         impressionId: randomUUID(),
         leaseToken: ad.leaseToken,
         platform: "openai",
-        placement: "under_prompt",
+        placement: "thinking_indicator",
         displayMode: "wait_time_only",
         submittedAt: Date.now() - 5_700,
         aiWaitDurationMs: 5_700,

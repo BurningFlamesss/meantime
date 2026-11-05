@@ -132,12 +132,15 @@ MeanTime should feel like a quiet utility, not an ad network:
 2. The extension prefetches up to 15 ads while idle and keeps at most 25
    locally (~15 KB target).
 3. User sends a prompt on a supported AI site.
-4. A single ad appears beneath the prompt (default placement) in a closed
-   Shadow DOM, with a progress indicator and dismiss/pause controls.
+4. A single ad appears in the thinking bubble (default placement) or above the
+   prompt box, in a closed Shadow DOM, with dismiss/pause controls.
 5. The viewport timer accrues only while the ad is at least 75% visible, the
    page is visible, and the window is focused.
-6. At 5,000 ms cumulative, the ad shows "✓ Earned" and fades out. In
-   `wait_time_only` mode it disappears the moment the AI starts streaming.
+6. At 5,000 ms cumulative, the ad fades out. In `wait_time_only` mode it
+   disappears the moment the AI starts streaming. In either mode, an active
+   hover keeps the ad (and its hover clock) alive until the pointer leaves, so
+   a reader is never interrupted; that extra hover time is reported as a
+   campaign metric.
 7. The impression is queued locally and flushed in a compressed batch every
    15 minutes or 15 impressions.
 8. The server validates the lease, human signals, pacing, and cadence; credits
@@ -156,7 +159,11 @@ MeanTime should feel like a quiet utility, not an ad network:
 3. Deterministic policy checks run first (blocked terms, malformed URL,
    suspicious TLDs, character repetition).
 4. A local non-chat classifier scores the copy. Score ≥85 auto-approves,
-   <40 auto-rejects, and the middle band routes to human review.
+   <40 auto-rejects, and the middle band routes to human review. Campaigns
+   below the auto-approve band are never shown to the advertiser as an error:
+   they appear in the portal under a collapsible "Under review" section while
+   an operator reviews them. Development builds surface the raw verdict to make
+   classifier tuning faster.
 5. An approved campaign becomes active and enters the prefetch pool.
 6. The advertiser sees views, verified views, completion rate, intentional
    hovers, clicks, CTR, spend, and a per-geo-cluster breakdown.
@@ -187,7 +194,8 @@ MeanTime should feel like a quiet utility, not an ad network:
 
 ### 6.5 Payout
 
-1. User requests a payout at or above the **$5.00** threshold.
+1. User requests any amount at or above the **$5.00** minimum, up to their
+   available balance (for example $7.00 of a $10.00 balance).
 2. The system checks balance, frozen state, and payout-address uniqueness.
 3. A composite trust score is computed from account age, network diversity,
    payout uniqueness, proof-of-human-interaction ratio, and prompt cadence.
@@ -204,17 +212,17 @@ MeanTime should feel like a quiet utility, not an ad network:
 
 | ID | Requirement | Priority |
 |---|---|---|
-| EXT-01 | Support ChatGPT, Gemini, Claude, Grok, and DeepSeek with host-scoped content scripts. | P0 |
+| EXT-01 | Support ChatGPT, Claude, and Gemini only; activate the content script solely on those hosts. Grok/DeepSeek adapters may stay in the codebase but must not be registered or matched. | P0 |
 | EXT-02 | Detect prompt submission via Enter (without Shift/composition) or send-button pointerdown using passive capture listeners. | P0 |
 | EXT-03 | Prefetch ads only while idle or when the local cache is below the low-water mark. | P0 |
-| EXT-04 | Cache at most 25 ads; prefetch in batches of 15; never exceed the ring buffer. | P0 |
-| EXT-05 | Deduplicate locally using lease expiry, per-day cap, and cooldown metadata without network calls. | P0 |
+| EXT-04 | Cache at most 25 ads; prefetch in batches of 15; drop expired, malformed, and duplicate leases on read so stale entries never inflate the cache or block the low-water refill. | P0 |
+| EXT-05 | Deduplicate locally by lease id using lease expiry, per-day cap, and cooldown metadata without network calls. | P0 |
 | EXT-06 | Render the ad in a closed Shadow DOM beneath the prompt, without layout shift. | P0 |
 | EXT-07 | Provide dismiss, snooze (10/15/60 min), and pause-indefinitely controls. | P0 |
 | EXT-08 | Offer `wait_time_only` and `persist_until_5s` display modes. | P0 |
-| EXT-09 | Offer `under_prompt`, `thinking_indicator`, and `ai_footer` placements. | P0 |
+| EXT-09 | Offer exactly two placements: `thinking_indicator` ("In the thinking bubble") and `above_composer` ("Above prompt box"). | P0 |
 | EXT-10 | Accrue viewport time only when ≥75% visible, page visible, and window focused. | P0 |
-| EXT-11 | Show a progress indicator and an earned confirmation. | P1 |
+| EXT-11 | Show a bottom-edge view-progress bar that fills from 0% to 100% as active view time accrues; do not add a separate earned badge. | P1 |
 | EXT-12 | Track intentional hover only after 500 ms of continuous hover. | P1 |
 | EXT-13 | Queue impressions locally and flush in batches every 15 min or 15 events. | P0 |
 | EXT-14 | Compress batches with `deflate` when payload is >1 KB, if supported. | P1 |
@@ -223,6 +231,7 @@ MeanTime should feel like a quiet utility, not an ad network:
 | EXT-17 | Persist settings locally and survive service-worker restarts. | P0 |
 | EXT-18 | Fail silently when the API is unreachable, keeping the existing cache. | P0 |
 | EXT-19 | Onboarding/login flow inside the extension. | P0 |
+| EXT-20 | Show an ad-only rate-limit exhaustion bar in the popup for both server 429 cooldowns and local pacing. It must distinguish "rate limited" from "not working" and state that AI chats are never throttled. | P1 |
 
 ### 7.2 API and anti-fraud
 
@@ -240,7 +249,7 @@ MeanTime should feel like a quiet utility, not an ad network:
 | API-10 | Log fraud signals with severity, rule, and structured detail. | P0 |
 | API-11 | Resolve IPs to coarse geo clusters in memory and discard the raw IP. | P0 |
 | API-12 | Serve `/health` for orchestration liveness. | P0 |
-| API-13 | Rate-limit auth, prefetch, telemetry, and payout endpoints. | P1 |
+| API-13 | Rate-limit auth, prefetch, telemetry, and payout endpoints; return `Retry-After` and `x-ratelimit-*` headers so clients can back off naturally. | P1 |
 | API-14 | Refresh-token rotation and session revocation. | P1 |
 
 ### 7.3 Web app
@@ -346,7 +355,7 @@ MeanTime should feel like a quiet utility, not an ad network:
 
 - Chrome/Chromium extension for five AI platforms.
 - Prefetch + local cache + single-use leases.
-- Two display modes and three placements.
+- Two display modes and two placements (thinking bubble, above prompt box).
 - Viewport timing, hover intent, batched compressed telemetry.
 - Five-layer anti-fraud engine.
 - Double-entry ledger and $5 payout workflow (request + audit; no processor).

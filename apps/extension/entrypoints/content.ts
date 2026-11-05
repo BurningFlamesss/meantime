@@ -5,6 +5,7 @@ import {
   type ImpressionEvent,
   type Placement,
   type PohiSignals,
+  type PrefetchedAd,
 } from "@meantime/shared";
 import { resolveAdapter } from "../lib/adapters/registry";
 import type { MountTarget, PlatformAdapter } from "../lib/adapters/base";
@@ -19,6 +20,7 @@ import {
   saveSettings,
   STORAGE_KEYS,
   storageGet,
+  storageSet,
   uuidv4,
 } from "../lib/storage";
 import type { PromptCounter } from "../lib/storage";
@@ -36,16 +38,8 @@ export default defineContentScript({
     "*://*.chat.openai.com/*",
     "*://gemini.google.com/*",
     "*://*.gemini.google.com/*",
-    "*://grok.com/*",
-    "*://*.grok.com/*",
-    "*://x.com/i/grok*",
-    "*://*.x.com/i/grok*",
     "*://claude.ai/*",
     "*://*.claude.ai/*",
-    "*://deepseek.com/*",
-    "*://*.deepseek.com/*",
-    "*://chat.deepseek.com/*",
-    "*://*.chat.deepseek.com/*",
   ],
   runAt: "document_idle",
   main() {
@@ -78,6 +72,8 @@ class MeanTimeController {
     placement: Placement;
     pohiAtSubmit: Omit<PohiSignals, "aiMutationVerified">;
     closed: boolean;
+    /** Reason requested while the pointer held the ad open. */
+    pendingClose: CloseReason | null;
   } | null = null;
 
   private generationObserver: MutationObserver | null = null;
@@ -86,6 +82,8 @@ class MeanTimeController {
   private lifetimeTimer: number | null = null;
   private connectionTimer: number | null = null;
   private initialAiNode: HTMLElement | null = null;
+  /** Trimmed text length of the latest AI message at submit, to detect growth on a reused node. */
+  private initialAiTextLen = 0;
   private firstOutputAt: number | null = null;
 
   constructor(private readonly adapter: PlatformAdapter) {}
@@ -222,6 +220,7 @@ class MeanTimeController {
     const initialUserNode = this.adapter.findLatestUserMessage();
     this.preSubmitUserMsgKey = this.adapter.getMessageKey(initialUserNode);
     const initialAiNode = this.adapter.findLatestAiMessage();
+    this.initialAiTextLen = initialAiNode?.textContent?.trim().length ?? 0;
 
     const snap = this.pohi.snapshot(false);
     const pohiAtSubmit = {
@@ -232,11 +231,26 @@ class MeanTimeController {
 
     this.inFlight = true;
 
-    // Immediately kick off ad prefetch and pacing check in parallel with DOM resolution
-    const adPromise = chrome.runtime
-      .sendMessage({ type: "take_ad", platform: this.adapter.platformId })
-      .catch(() => null);
-    const pacingPromise = this.pacingAllows();
+    // Prompt volume is recorded for telemetry/fraud audits, but the pacing
+    // decision uses mounted ads only. Ordinary AI use therefore never spends
+    // ad capacity or silences ads it did not actually show.
+    const pacingPromise = this.recordPrompt().then(() => this.pacingAllows());
+    const requestAd = (): Promise<PrefetchedAd | null> =>
+      chrome.runtime
+        .sendMessage({ type: "take_ad", platform: this.adapter.platformId })
+        .catch(() => null) as Promise<PrefetchedAd | null>;
+    let adPromise: Promise<PrefetchedAd | null> | null = null;
+    // A lease taken from the cache is single-use. If this prompt never mounts
+    // an ad, put it back instead of silently burning it.
+    const releaseUnusedAd = () => {
+      const pending = adPromise;
+      if (!pending) return;
+      void pending
+        .then((ad) => {
+          if (ad) void chrome.runtime.sendMessage({ type: "return_ad", ad }).catch(() => undefined);
+        })
+        .catch(() => undefined);
+    };
 
     try {
       const allowed = await pacingPromise;
@@ -245,14 +259,14 @@ class MeanTimeController {
         return;
       }
 
+      // Take the ad in parallel with slot resolution so mount stays instant.
+      adPromise = requestAd();
+
       // Fast mount resolution via MutationObserver (zero-latency DOM attachment)
-      const resolved = await this.waitForMountPoint(
-        settings.placement,
-        initialAiNode,
-        settings.placement === "ai_footer" ? 15_000 : 1_500,
-      );
+      const resolved = await this.waitForMountPoint(settings.placement);
       if (!resolved || !resolved.target) {
         console.warn("[MeanTime] Could not find mount point for placement:", settings.placement);
+        releaseUnusedAd();
         return;
       }
       const mountPoint = resolved.target;
@@ -298,6 +312,7 @@ class MeanTimeController {
 
       try {
         widget.mount(mountPoint, actualPlacement, resolvedTheme, this.adapter.platformId);
+        void this.bumpAdCounter().catch(() => undefined);
         console.info(
           "[MeanTime] Ad mounted successfully:",
           ad.headline,
@@ -324,6 +339,7 @@ class MeanTimeController {
         placement: actualPlacement,
         pohiAtSubmit,
         closed: false,
+        pendingClose: null,
       };
 
       this.pohi.reset();
@@ -336,19 +352,17 @@ class MeanTimeController {
   }
 
   /**
-   * Resolve the placement with a MutationObserver for zero-delay DOM detection.
+   * Resolve one of the two slots with a scoped MutationObserver (no document
+   * polling while idle).
    * - "above_composer": ready immediately above the prompt box.
-   * - "under_prompt": waits for the newly sent user bubble (keyed via getMessageKey).
-   * - "thinking_indicator": waits for model reasoning / thinking block.
-   * - "ai_footer": waits for the new AI message node.
-   * Falls back safely to above the composer or under prompt (NEVER inside the prompt box).
+   * - "thinking_indicator": waits for the new user turn, then mounts after it,
+   *   exactly where the assistant's thinking bubble will render.
+   * If the chosen slot cannot be found the other slot is used rather than
+   * leaving a broken container behind.
    */
   private waitForMountPoint(
     placement: Placement,
-    initialAiNode: HTMLElement | null,
-    timeoutMs: number,
   ): Promise<{ target: MountTarget | HTMLElement | null; placement: Placement }> {
-    // 1. "above_composer" is ready immediately (no waiting for response)
     if (placement === "above_composer") {
       const slot = this.adapter.getAboveComposerSlot();
       if (slot) return Promise.resolve({ target: slot, placement: "above_composer" });
@@ -372,83 +386,59 @@ class MeanTimeController {
       };
 
       const checkNow = () => {
-        if (placement === "under_prompt") {
-          const latest = this.adapter.findLatestUserMessage();
-          const key = this.adapter.getMessageKey(latest);
-          const isNew = this.preSubmitUserMsgKey === null ? latest !== null : key !== this.preSubmitUserMsgKey;
-          if (isNew && latest) {
-            const slot = this.adapter.getUserMessageActionSlot(latest);
-            if (slot) {
-              finish({ target: slot, placement: "under_prompt" });
-              return true;
-            }
+        if (placement === "above_composer") {
+          const slot = this.adapter.getAboveComposerSlot();
+          if (slot) {
+            finish({ target: slot, placement: "above_composer" });
+            return true;
           }
-        } else if (placement === "thinking_indicator") {
-          const latest = this.adapter.findLatestUserMessage();
-          const key = this.adapter.getMessageKey(latest);
-          const isNew = this.preSubmitUserMsgKey === null ? latest !== null : key !== this.preSubmitUserMsgKey;
-          if (isNew && latest) {
-            const thinking = this.adapter.getThinkingSlot();
-            if (thinking) {
-              finish({ target: thinking, placement: "thinking_indicator" });
-              return true;
-            }
-          }
-        } else if (placement === "ai_footer") {
-          const latestAi = this.adapter.findLatestAiMessage();
-          const isNewAi = initialAiNode === null ? latestAi !== null : latestAi !== null && latestAi !== initialAiNode;
-          if (isNewAi && latestAi) {
-            const slot = this.adapter.getAiMessageFooterSlot(latestAi);
-            if (slot) {
-              finish({ target: slot, placement: "ai_footer" });
-              return true;
-            }
-          }
+          return false;
         }
-        return false;
+
+        const latest = this.adapter.findLatestUserMessage();
+        if (!latest) return false;
+        const key = this.adapter.getMessageKey(latest);
+        const isNew =
+          this.preSubmitUserMsgKey === null ? true : key !== this.preSubmitUserMsgKey;
+        if (!isNew) return false;
+        const slot = this.adapter.getThinkingSlot();
+        if (!slot) return false;
+        finish({ target: slot, placement: "thinking_indicator" });
+        return true;
       };
 
-      // Check immediately (in case the node rendered synchronously)
       if (checkNow()) return;
 
-      // Observe DOM mutations to react the exact microtask React commits the new message
+      // Scoped to the thread region where possible; document.body only as a
+      // fallback while a SPA has not rendered its main container yet.
+      const region =
+        document.querySelector<HTMLElement>(
+          "main, [data-app-shell-focus-area='main'], div[data-thread-user-message-navigation-content], .thread-scroll-container",
+        ) ?? document.body;
       observer = new MutationObserver(() => {
         checkNow();
       });
-      observer.observe(document.body, { childList: true, subtree: true });
+      observer.observe(region, { childList: true, subtree: true });
 
       timeoutTimer = window.setTimeout(() => {
-        console.warn(`[MeanTime] Target for "${placement}" not found in ${timeoutMs}ms; using safe fallback`);
-        finish(this.fallbackMount(placement));
-      }, timeoutMs);
+        console.warn(`[MeanTime] Slot "${placement}" not ready; using safe fallback`);
+        finish(this.fallbackMount());
+      }, 3_000);
     });
   }
 
-  private fallbackMount(requestedPlacement?: Placement): { target: MountTarget | HTMLElement | null; placement: Placement } {
-    // If thinking indicator or AI footer was requested but didn't appear (e.g. non-reasoning model or slow response),
-    // try to anchor under the latest user prompt
-    if (requestedPlacement === "thinking_indicator" || requestedPlacement === "ai_footer") {
-      const user = this.adapter.findLatestUserMessage();
-      if (user) {
-        const slot = this.adapter.getUserMessageActionSlot(user);
-        if (slot) return { target: slot, placement: "under_prompt" };
-      }
-    }
+  private fallbackMount(): { target: MountTarget | HTMLElement | null; placement: Placement } {
+    const thinking = this.adapter.getThinkingSlot();
+    if (thinking) return { target: thinking, placement: "thinking_indicator" };
 
-    // Clean above-composer slot outside the prompt form (NEVER inside form)
     const above = this.adapter.getAboveComposerSlot();
     if (above) return { target: above, placement: "above_composer" };
 
-    const user = this.adapter.findLatestUserMessage();
-    if (user) {
-      const slot = this.adapter.getUserMessageActionSlot(user);
-      if (slot) return { target: slot, placement: "under_prompt" };
-    }
-
-    const main = document.querySelector<HTMLElement>(
-      "main, [data-app-shell-focus-area='main'], div[data-thread-user-message-navigation-content], .thread-scroll-container",
-    ) ?? document.body;
-    return { target: main, placement: "under_prompt" };
+    const main =
+      document.querySelector<HTMLElement>(
+        "main, [data-app-shell-focus-area='main'], div[data-thread-user-message-navigation-content], .thread-scroll-container",
+      ) ?? document.body;
+    return { target: main, placement: "thinking_indicator" };
   }
 
   /**
@@ -458,25 +448,15 @@ class MeanTimeController {
     this.reanchorObserver?.disconnect();
     this.reanchorObserver = new MutationObserver(() => {
       if (!this.activeWidget || this.activeLease?.closed) return;
-      if (placement === "under_prompt") {
-        const latest = this.adapter.findLatestUserMessage();
-        if (latest) {
-          const slot = this.adapter.getUserMessageActionSlot(latest);
-          if (slot) this.activeWidget.reanchor(slot);
-        }
-      } else if (placement === "above_composer") {
+      if (placement === "above_composer") {
         const slot = this.adapter.getAboveComposerSlot();
         if (slot) this.activeWidget.reanchor(slot);
-      } else if (placement === "ai_footer") {
-        const latestAi = this.adapter.findLatestAiMessage();
-        if (latestAi) {
-          const slot = this.adapter.getAiMessageFooterSlot(latestAi);
-          if (slot) this.activeWidget.reanchor(slot);
-        }
-      } else if (placement === "thinking_indicator") {
-        const slot = this.adapter.getThinkingSlot();
-        if (slot) this.activeWidget.reanchor(slot);
+        return;
       }
+      const latest = this.adapter.findLatestUserMessage();
+      if (!latest) return;
+      const slot = this.adapter.getThinkingSlot();
+      if (slot) this.activeWidget.reanchor(slot);
     });
     this.reanchorObserver.observe(document.body, { childList: true, subtree: true });
   }
@@ -495,13 +475,13 @@ class MeanTimeController {
     this.connectionTimer = window.setInterval(() => {
       if (this.activeWidget && !widget.host.isConnected) {
         // Attempt reanchor before concluding the tab navigated (e.g. Gemini Angular turn replacement)
-        const user = this.adapter.findLatestUserMessage();
-        if (user) {
-          const slot = this.adapter.getUserMessageActionSlot(user);
-          if (slot) {
-            widget.reanchor(slot);
-            if (widget.host.isConnected) return;
-          }
+        const slot =
+          this.activeLease?.placement === "above_composer"
+            ? this.adapter.getAboveComposerSlot()
+            : this.adapter.getThinkingSlot();
+        if (slot) {
+          widget.reanchor(slot);
+          if (widget.host.isConnected) return;
         }
         this.finalize("navigated");
       }
@@ -548,18 +528,22 @@ class MeanTimeController {
 
       const latest = this.adapter.findLatestAiMessage();
       const isNew = this.initialAiNode === null ? latest !== null : latest !== null && latest !== this.initialAiNode;
+      const textLen = latest?.textContent?.trim().length ?? 0;
+      // Some frameworks reuse the assistant container across turns. Treat text
+      // growth in the same node as output too, so strict mode still closes on
+      // the first token instead of waiting for the whole answer.
+      const outputStarted = isNew
+        ? textLen > 0
+        : this.initialAiNode !== null && latest === this.initialAiNode && textLen > this.initialAiTextLen;
 
-      if (isNew && latest) {
-        const textLen = latest.textContent?.trim().length ?? 0;
-        if (textLen > 0) {
-          if (this.firstOutputAt === null) {
-            this.firstOutputAt = Date.now();
-          }
-          if (this.activeLease?.displayMode === "wait_time_only") {
-            this.teardownObserver();
-            this.finalize("stream_started");
-            return;
-          }
+      if (outputStarted) {
+        if (this.firstOutputAt === null) {
+          this.firstOutputAt = Date.now();
+        }
+        if (this.activeLease?.displayMode === "wait_time_only") {
+          this.teardownObserver();
+          this.finalize("stream_started");
+          return;
         }
       }
 
@@ -578,17 +562,6 @@ class MeanTimeController {
     this.generationInterval = window.setInterval(check, 50);
     this.generationCleanupTimer = window.setTimeout(() => this.teardownObserver(), MAX_AD_LIFETIME_MS);
     check();
-  }
-
-  private onFirstAiOutput(widget: AdWidget): void {
-    if (!this.activeLease || this.activeLease.closed) return;
-
-    const requiredMs = (widget.ad.durationSec ?? 5) * 1_000;
-    if (this.activeLease.displayMode === "wait_time_only") {
-      this.finalize("stream_started");
-    } else if (widget.timer.cumulativeMs >= requiredMs) {
-      this.finalize("earned");
-    }
   }
 
   private teardownObserver(): void {
@@ -617,18 +590,48 @@ class MeanTimeController {
 
   /* ------------------------------ finalization --------------------------- */
 
+  /**
+   * Request a close. A reader who is hovering keeps the ad (and its hover
+   * metrics) until the pointer leaves, bounded by HOVER_HOLD_MAX_MS. An explicit
+   * dismiss or snooze always closes immediately.
+   */
   private finalize(reason: CloseReason): void {
     const widget = this.activeWidget;
     const lease = this.activeLease;
     if (!widget || !lease || lease.closed) return;
 
-    // Never close or destroy while user is actively hovering over the ad
-    if (widget.isUserHovering && reason !== "dismissed" && reason !== "snoozed") {
-      widget.destroy(reason === "earned");
+    // An explicit dismiss/snooze always wins over a held close. The widget
+    // button handler already removed the host, so settle immediately rather
+    // than dropping the impression on the floor.
+    if (lease.pendingClose !== null) {
+      if (reason === "dismissed" || reason === "snoozed") {
+        lease.pendingClose = null;
+        this.settle(reason);
+      }
       return;
     }
 
+    const interruptible = reason !== "dismissed" && reason !== "snoozed";
+    if (interruptible && widget.isUserHovering) {
+      lease.pendingClose = reason;
+      this.teardownObserver();
+      this.clearWatchdogs();
+      if (widget.holdUntilPointerLeave(() => this.settle(lease.pendingClose ?? reason))) {
+        return;
+      }
+      lease.pendingClose = null;
+    }
+
+    this.settle(reason);
+  }
+
+  private settle(reason: CloseReason): void {
+    const widget = this.activeWidget;
+    const lease = this.activeLease;
+    if (!widget || !lease || lease.closed) return;
+
     lease.closed = true;
+    lease.pendingClose = null;
     this.teardownObserver();
     this.clearWatchdogs();
     this.stopWatchingReanchor();
@@ -656,6 +659,7 @@ class MeanTimeController {
     this.activeWidget = null;
     this.activeLease = null;
     this.initialAiNode = null;
+    this.initialAiTextLen = 0;
 
     const event: ImpressionEvent = {
       impressionId: lease.impressionId,
@@ -685,7 +689,7 @@ class MeanTimeController {
 
   /* -------------------------------- pacing ------------------------------- */
 
-  private async pacingAllows(): Promise<boolean> {
+  private async recordPrompt(): Promise<void> {
     const now = Date.now();
     let counter = await storageGet<PromptCounter>(STORAGE_KEYS.PROMPT_COUNTER, {
       windowStart: now,
@@ -695,12 +699,39 @@ class MeanTimeController {
       counter = { windowStart: now, count: 0 };
     }
     counter.count++;
-    await chrome.storage.local.set({ [STORAGE_KEYS.PROMPT_COUNTER]: counter });
+    await storageSet(STORAGE_KEYS.PROMPT_COUNTER, counter);
+  }
 
-    if (counter.count <= PACING.TIER1_MAX_PER_HOUR) return true;
-    if (counter.count <= PACING.TIER2_MAX_PER_HOUR) {
+  /**
+   * Ad-only pacing. Counting mounted ads (not prompts) means a user can chat
+   * all they want; only the number of ads actually delivered is capped.
+   */
+  private async pacingAllows(): Promise<boolean> {
+    const now = Date.now();
+    let counter = await storageGet<PromptCounter>(STORAGE_KEYS.AD_COUNTER, {
+      windowStart: now,
+      count: 0,
+    });
+    if (now - counter.windowStart > PACING.WINDOW_SECONDS * 1000) {
+      return true;
+    }
+    if (counter.count < PACING.TIER1_MAX_PER_HOUR) return true;
+    if (counter.count < PACING.TIER2_MAX_PER_HOUR) {
       return counter.count % PACING.TIER2_PROMPT_DIVISOR === 0;
     }
     return false; // Tier 3: silent cap for the rest of the window.
+  }
+
+  private async bumpAdCounter(): Promise<void> {
+    const now = Date.now();
+    let counter = await storageGet<PromptCounter>(STORAGE_KEYS.AD_COUNTER, {
+      windowStart: now,
+      count: 0,
+    });
+    if (now - counter.windowStart > PACING.WINDOW_SECONDS * 1000) {
+      counter = { windowStart: now, count: 0 };
+    }
+    counter.count++;
+    await storageSet(STORAGE_KEYS.AD_COUNTER, counter);
   }
 }

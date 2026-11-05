@@ -1,18 +1,12 @@
 import type { PlatformAdapter } from "./base";
-import {
-  ClaudeAdapter,
-  DeepseekAdapter,
-  GeminiAdapter,
-  GrokAdapter,
-  OpenAiAdapter,
-} from "./platforms";
+import { ClaudeAdapter, GeminiAdapter, OpenAiAdapter } from "./platforms";
 
+// Only these three domains are activated. Grok/DeepSeek adapters are kept for
+// future rollout, but they are deliberately not registered or matched.
 const ADAPTERS: PlatformAdapter[] = [
   new OpenAiAdapter(),
   new GeminiAdapter(),
   new ClaudeAdapter(),
-  new GrokAdapter(),
-  new DeepseekAdapter(),
 ];
 
 export function resolveAdapter(hostname: string, pathname: string): PlatformAdapter | null {

@@ -23,13 +23,55 @@ function serial<T>(fn: () => Promise<T>): Promise<T> {
   return run;
 }
 
-export async function getCachedAds(): Promise<PrefetchedAd[]> {
-  return storageGet<PrefetchedAd[]>(STORAGE_KEYS.AD_CACHE, []);
+/**
+ * Keep only live, well-formed, unique leases. Storage can survive a version
+ * change or a partial write, and expired leases used to keep the cache looking
+ * full (so the low-water prefetch never fired). Deduplicating by leaseId also
+ * stops a requeued ad from being handed to two tabs.
+ */
+export function normalizeCachedAds(pool: PrefetchedAd[], now = Date.now()): PrefetchedAd[] {
+  const seen = new Set<string>();
+  const live: PrefetchedAd[] = [];
+  for (const ad of pool) {
+    if (!ad || typeof ad !== "object") continue;
+    if (typeof ad.leaseId !== "string" || ad.leaseId.length === 0) continue;
+    if (typeof ad.leaseToken !== "string" || ad.leaseToken.length === 0) continue;
+    if (typeof ad.campaignId !== "string" || ad.campaignId.length === 0) continue;
+    if (typeof ad.headline !== "string" || ad.headline.trim().length === 0) continue;
+    if (typeof ad.ctaText !== "string" || ad.ctaText.trim().length === 0) continue;
+    if (typeof ad.targetUrl !== "string") continue;
+    if (!ad.frequencyCap || typeof ad.frequencyCap.maxPerDay !== "number") continue;
+    if (typeof ad.expiresAt !== "number" || ad.expiresAt * 1000 <= now) continue;
+    if (seen.has(ad.leaseId)) continue;
+    seen.add(ad.leaseId);
+    live.push(ad);
+  }
+  // Ring buffer: keep the newest MAX_CACHED_ADS entries.
+  return live.slice(-EXTENSION_CACHE.MAX_CACHED_ADS);
+}
+
+export async function getCachedAds(now = Date.now()): Promise<PrefetchedAd[]> {
+  const raw = await storageGet<PrefetchedAd[]>(STORAGE_KEYS.AD_CACHE, []);
+  return normalizeCachedAds(Array.isArray(raw) ? raw : [], now);
 }
 
 export async function setCachedAds(ads: PrefetchedAd[]): Promise<void> {
-  // Ring buffer: keep the newest MAX_CACHED_ADS entries.
-  await storageSet(STORAGE_KEYS.AD_CACHE, ads.slice(-EXTENSION_CACHE.MAX_CACHED_ADS));
+  await storageSet(STORAGE_KEYS.AD_CACHE, normalizeCachedAds(ads));
+}
+
+/**
+ * Merge a prefetch response into the cache inside the same serial chain as
+ * takeAd/requeueAd. Re-reading the pool here is what prevents a request that
+ * started before a tab consumed a lease from putting that lease back.
+ */
+export function mergeCachedAds(fresh: PrefetchedAd[]): Promise<void> {
+  return serial(async () => {
+    const pool = await getCachedAds();
+    const known = new Set(pool.map((a) => a.leaseId));
+    const additions = normalizeCachedAds(fresh).filter((a) => !known.has(a.leaseId));
+    if (additions.length === 0) return;
+    await storageSet(STORAGE_KEYS.AD_CACHE, normalizeCachedAds([...pool, ...additions]));
+  });
 }
 
 export async function cacheSize(): Promise<number> {
@@ -59,8 +101,11 @@ export function filterEligible(
   maxDurationSec?: number,
 ): PrefetchedAd[] {
   const today = dayKey(now);
+  const seenLeases = new Set<string>();
   return pool.filter((ad) => {
     if (ad.expiresAt * 1000 <= now) return false;
+    if (seenLeases.has(ad.leaseId)) return false;
+    seenLeases.add(ad.leaseId);
     if (!supportsPlatform(ad, platform)) return false;
     if (maxDurationSec !== undefined && (ad.durationSec ?? 5) > maxDurationSec) return false;
     const rec = history[ad.campaignId];
@@ -114,8 +159,11 @@ export function takeAd(
 /** Return an ad whose widget failed to mount so its lease is not wasted. */
 export function requeueAd(ad: PrefetchedAd): Promise<void> {
   return serial(async () => {
+    if (ad.expiresAt * 1000 <= Date.now()) return;
     const pool = await getCachedAds();
     if (pool.some((a) => a.leaseId === ad.leaseId)) return;
-    await setCachedAds([ad, ...pool]);
+    // Append, not prepend: setCachedAds keeps the newest entries at the tail,
+    // so a requeued lease would otherwise be dropped when the cache is full.
+    await setCachedAds([...pool, ad]);
   });
 }

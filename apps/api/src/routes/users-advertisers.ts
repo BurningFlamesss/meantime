@@ -303,6 +303,12 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext) {
       if (available < BigInt(PAYOUT_THRESHOLD_USD)) {
         return { error: "below_threshold" } as const;
       }
+      // Partial withdrawals are allowed, but every withdrawal must itself
+      // clear the $5 minimum. Without this check a $10 balance could withdraw
+      // $0.01 and bypass the threshold's audit economics.
+      if (amountMicro < BigInt(PAYOUT_THRESHOLD_USD)) {
+        return { error: "below_threshold" } as const;
+      }
       if (amountMicro > available) return { error: "insufficient_balance" } as const;
 
       // Layer 5: one payout address = one account. The unique index is the
@@ -731,6 +737,8 @@ export async function advertiserRoutes(app: FastifyInstance, ctx: AppContext) {
         verifiedViews: sql<number>`count(*) filter (where ${impressions.earned})`,
         uniqueUsers: sql<number>`count(distinct ${impressions.userId})`,
         intentionalHovers: sql<number>`count(*) filter (where ${impressions.hoverIntentional})`,
+        totalHoverMs: sql<number>`coalesce(sum(${impressions.hoverMs}), 0)`,
+        avgHoverMs: sql<number>`coalesce(avg(${impressions.hoverMs}), 0)`,
         avgRetentionMs: sql<number>`coalesce(avg(${impressions.cumulativeVisibleMs}), 0)`,
       })
       .from(impressions)
@@ -789,6 +797,8 @@ export async function advertiserRoutes(app: FastifyInstance, ctx: AppContext) {
         verifiedViews: Number(totals?.verifiedViews ?? 0),
         uniqueUsers: Number(totals?.uniqueUsers ?? 0),
         intentionalHovers: Number(totals?.intentionalHovers ?? 0),
+        totalHoverMs: Number(totals?.totalHoverMs ?? 0),
+        avgHoverMs: Math.round(Number(totals?.avgHoverMs ?? 0)),
         clicks: clicksCount,
         ctr: views > 0 ? clicksCount / views : 0,
         avgRetentionMs: Math.round(Number(totals?.avgRetentionMs ?? 0)),

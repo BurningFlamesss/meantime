@@ -21,24 +21,45 @@ function Payouts() {
   const [balance, setBalance] = useState<UserBalance | null>(null);
   const [method, setMethod] = useState("paypal");
   const [address, setAddress] = useState("");
+  const [amount, setAmount] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    api<UserBalance>("/me/balance").then(setBalance).catch(() => undefined);
+    api<UserBalance>("/me/balance")
+      .then((next) => {
+        setBalance(next);
+        // Default to the full available balance; the user can lower it.
+        setAmount((next.availableMicro / 1_000_000).toFixed(2));
+      })
+      .catch(() => undefined);
   }, []);
 
+  const minUsd = PAYOUT_THRESHOLD_USD / 1_000_000;
+  const maxUsd = balance ? balance.availableMicro / 1_000_000 : 0;
+  const parsedUsd = Number(amount);
+  const amountMicro = Number.isFinite(parsedUsd) ? Math.round(parsedUsd * 1_000_000) : 0;
   const canWithdraw = balance !== null && balance.availableMicro >= PAYOUT_THRESHOLD_USD;
+  const amountValid =
+    canWithdraw && amountMicro >= PAYOUT_THRESHOLD_USD && amountMicro <= balance.availableMicro;
 
   async function request(e: React.FormEvent): Promise<void> {
     e.preventDefault();
     if (!balance) return;
+    if (!amountValid) {
+      setMessage(
+        amountMicro < PAYOUT_THRESHOLD_USD
+          ? `The minimum withdrawal is ${formatMicroCents(PAYOUT_THRESHOLD_USD)}.`
+          : `You can withdraw up to ${formatMicroCents(balance.availableMicro)}.`,
+      );
+      return;
+    }
     setBusy(true);
     setMessage(null);
     try {
       const res = await api<{ status: string; trustScore: number }>("/payouts/request", {
         method: "POST",
-        json: { method, address, amountMicro: balance.availableMicro },
+        json: { method, address, amountMicro },
       });
       setMessage(`Request submitted — status: ${res.status} (trust score ${res.trustScore}).`);
     } catch (err) {
@@ -77,10 +98,38 @@ function Payouts() {
             <input required value={address} onChange={(e) => setAddress(e.target.value)}
               placeholder="you@example.com or wallet address" className="input" />
           </div>
-          <div className="flex items-center gap-3">
-            <button type="submit" disabled={!canWithdraw || busy} className="btn-primary">
+          <div>
+            <label className="label">Amount (USD)</label>
+            <input
+              required
+              type="number"
+              min={minUsd}
+              max={maxUsd || undefined}
+              step="0.01"
+              inputMode="decimal"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              className="input"
+            />
+            <p className="mt-1 text-xs text-neutral-400">
+              {canWithdraw
+                ? `Between ${formatMicroCents(PAYOUT_THRESHOLD_USD)} and ${formatMicroCents(balance.availableMicro)}. The rest stays in your balance.`
+                : `Withdrawals open at ${formatMicroCents(PAYOUT_THRESHOLD_USD)}.`}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <button type="submit" disabled={!amountValid || busy} className="btn-primary">
               {busy ? "Submitting…" : canWithdraw ? "Request payout" : "Below $5.00 threshold"}
             </button>
+            {canWithdraw && (
+              <button
+                type="button"
+                className="btn-ghost text-xs"
+                onClick={() => setAmount((balance.availableMicro / 1_000_000).toFixed(2))}
+              >
+                Use full balance
+              </button>
+            )}
             {message && <p className="text-sm text-neutral-500">{message}</p>}
           </div>
         </form>

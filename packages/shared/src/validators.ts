@@ -19,7 +19,7 @@ export const impressionEventSchema = z.object({
   impressionId: z.string().uuid(),
   leaseToken: z.string().min(16).max(2048),
   platform: z.string().min(1).max(32),
-  placement: z.enum(["under_prompt", "above_composer", "thinking_indicator", "ai_footer"]),
+  placement: z.enum(["thinking_indicator", "above_composer"]),
   displayMode: z.enum(["wait_time_only", "persist_until_5s"]),
   submittedAt: z.number().int().positive(),
   aiWaitDurationMs: z.number().min(0).max(600_000),
@@ -53,6 +53,8 @@ export const prefetchRequestSchema = z.object({
   count: z.number().int().min(1).max(25),
   platforms: z.array(z.string().max(32)).max(8).default([]),
   maxDurationSec: z.number().int().min(CAMPAIGN_DURATION.MIN_SEC).max(CAMPAIGN_DURATION.MAX_SEC).optional(),
+  /** Campaigns the client already holds, so a batch never wastes leases on duplicates. */
+  excludeCampaignIds: z.array(z.string().uuid()).max(50).default([]),
 });
 
 /**

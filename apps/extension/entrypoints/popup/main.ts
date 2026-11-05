@@ -1,7 +1,11 @@
 import type { UserBalance } from "@meantime/shared";
+// Import the leaf module: the shared barrel would pull zod/db code into the
+// popup bundle just to read three pacing numbers.
+import { PACING } from "@meantime/shared/constants";
 import { WEB_BASE, apiFetch, getApiBase, setApiBase } from "../../lib/api-client";
 import { authenticate, signOut, type AuthMode } from "../../lib/session";
 import {
+  DEFAULT_AD_REQUEST_LIMIT,
   getSettings,
   PAUSE_UNTIL_RESTART,
   pauseState,
@@ -9,8 +13,11 @@ import {
   STORAGE_KEYS,
   storageGet,
   storageSet,
+  type AdRequestLimit,
   type ExtensionSettings,
   type Identity,
+  type PacingSnapshot,
+  type PromptCounter,
 } from "../../lib/storage";
 
 function el<T extends HTMLElement>(id: string): T {
@@ -56,7 +63,14 @@ async function init(): Promise<void> {
   const statBalance = el<HTMLElement>("stat-balance");
   const statCache = el<HTMLElement>("stat-cache");
   const statPending = el<HTMLElement>("stat-pending");
+  const rateLimitBox = el<HTMLElement>("rate-limit");
+  const rateLimitLabel = el<HTMLElement>("rate-limit-label");
+  const rateLimitValue = el<HTMLElement>("rate-limit-value");
+  const rateTrack = el<HTMLElement>("rate-track");
+  const rateFill = el<HTMLElement>("rate-fill");
+  const rateDetail = el<HTMLElement>("rate-detail");
   const syncNow = el<HTMLButtonElement>("sync-now");
+  let signedIn = false;
 
   apiBase.value = await getApiBase();
 
@@ -73,6 +87,78 @@ async function init(): Promise<void> {
             1,
             Math.ceil((state.resumesAt - Date.now()) / 60_000),
           )} min.`;
+  }
+
+  /**
+   * Ad-only capacity meter. Local prompt pacing and server 429s both land here,
+   * so "nothing is happening" is distinguishable from "the ad limit is spent".
+   * The AI site itself is never throttled by MeanTime.
+   */
+  async function renderRateLimit(): Promise<void> {
+    if (!signedIn) {
+      rateLimitBox.hidden = true;
+      return;
+    }
+    rateLimitBox.hidden = false;
+
+    const now = Date.now();
+    const [limit, pacing, counter] = await Promise.all([
+      storageGet<AdRequestLimit>(STORAGE_KEYS.AD_REQUEST_LIMIT, DEFAULT_AD_REQUEST_LIMIT),
+      storageGet<PacingSnapshot | null>(STORAGE_KEYS.PACING_STATE, null),
+      storageGet<PromptCounter>(STORAGE_KEYS.AD_COUNTER, { windowStart: now, count: 0 }),
+    ]);
+
+    const counterLive = now - counter.windowStart < PACING.WINDOW_SECONDS * 1_000;
+    const adsShown = counterLive ? counter.count : 0;
+    const pacingFresh = !!pacing && now - pacing.updatedAt < PACING.WINDOW_SECONDS * 1_000;
+
+    let percent = Math.min(100, Math.round((adsShown / PACING.TIER2_MAX_PER_HOUR) * 100));
+    let severity: "ok" | "warn" | "limited" = "ok";
+    let label = "Ad capacity";
+    let value = `${Math.max(0, PACING.TIER1_MAX_PER_HOUR - adsShown)} full-speed ads left`;
+    let detail = "Only ad requests are limited — your AI chats are never throttled.";
+    let resumesAt = 0;
+
+    if (limit.limitedUntil > now) {
+      severity = "limited";
+      percent = 100;
+      label = "Ad rate limit exhausted";
+      resumesAt = limit.limitedUntil;
+      detail = "The server paused ad requests. Your AI chats are unaffected.";
+    } else if (pacingFresh && pacing.tier === 3) {
+      severity = "limited";
+      percent = 100;
+      label = "Ad rate limit exhausted";
+      resumesAt = pacing.updatedAt + PACING.WINDOW_SECONDS * 1_000;
+      detail = "Ads are paused for this hour. Your AI chats are unaffected.";
+    } else if (adsShown >= PACING.TIER2_MAX_PER_HOUR) {
+      severity = "limited";
+      percent = 100;
+      label = "Ad rate limit exhausted";
+      resumesAt = counter.windowStart + PACING.WINDOW_SECONDS * 1_000;
+      detail = "Hourly ad limit reached. Your AI chats are unaffected.";
+    } else if (adsShown >= PACING.TIER1_MAX_PER_HOUR || (pacingFresh && pacing.tier === 2)) {
+      severity = "warn";
+      percent = Math.max(
+        percent,
+        Math.round((PACING.TIER1_MAX_PER_HOUR / PACING.TIER2_MAX_PER_HOUR) * 100),
+      );
+      label = "Ad rate limit: throttled";
+      value = "Every 3rd ad";
+      detail = "High ad volume — ads are throttled, not your AI. Chats are unaffected.";
+    }
+
+    if (resumesAt > now) {
+      value = `Resumes in ~${Math.max(1, Math.ceil((resumesAt - now) / 60_000))} min`;
+    }
+
+    rateLimitLabel.textContent = label;
+    rateLimitValue.textContent = value;
+    rateDetail.textContent = detail;
+    rateFill.style.width = `${percent}%`;
+    rateTrack.setAttribute("aria-valuenow", String(percent));
+    rateLimitBox.classList.toggle("warn", severity === "warn");
+    rateLimitBox.classList.toggle("limited", severity === "limited");
   }
 
   function setAuthMode(mode: AuthMode): void {
@@ -113,18 +199,20 @@ async function init(): Promise<void> {
 
   async function renderSession(): Promise<void> {
     const identity = await storageGet<Identity | null>(STORAGE_KEYS.IDENTITY, null);
-    const signedIn = !!identity;
+    signedIn = !!identity;
     authView.hidden = signedIn;
     appView.hidden = !signedIn;
     if (!identity) {
       statBalance.textContent = "–";
       statCache.textContent = "–";
       statPending.textContent = "–";
+      rateLimitBox.hidden = true;
       return;
     }
     accountEmail.textContent = identity.email ?? identity.userId.slice(0, 8);
     void loadStatus();
     void loadBalance();
+    void renderRateLimit();
     void chrome.runtime.sendMessage({ type: "prefetch_now" }).then(() => loadStatus()).catch(() => undefined);
   }
 
@@ -276,9 +364,18 @@ async function init(): Promise<void> {
   // A pause started in the in-page widget (or a timer running out) must show
   // up here without reopening the popup.
   setInterval(renderPause, 30_000);
+  // Keep the countdown/bar live while the popup is open.
+  setInterval(() => void renderRateLimit(), 1_000);
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     if (changes[STORAGE_KEYS.IDENTITY]) void renderSession();
+    if (
+      changes[STORAGE_KEYS.AD_COUNTER] ||
+      changes[STORAGE_KEYS.PACING_STATE] ||
+      changes[STORAGE_KEYS.AD_REQUEST_LIMIT]
+    ) {
+      void renderRateLimit();
+    }
     if (changes[STORAGE_KEYS.SETTINGS]) {
       void getSettings().then((next) => {
         settings = next;

@@ -1,5 +1,5 @@
 import type { PrefetchedAd } from "@meantime/shared";
-import { MIN_VIEWABLE_MS } from "@meantime/shared";
+import { HOVER_HOLD_MAX_MS, MIN_VIEWABLE_MS } from "@meantime/shared";
 import type { MountPosition, MountTarget } from "./adapters/base";
 import { ViewportTimer } from "./viewport-timer";
 import { HoverTracker } from "./hover-tracker";
@@ -15,6 +15,7 @@ const CSS = `
 
 .mt-wrap {
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -27,9 +28,10 @@ const CSS = `
   transition: opacity .35s ease, transform .35s ease, background .2s ease, color .2s ease;
 }
 
-/* ---------------- ZERO LAYOUT SHIFT PLACEMENT RULES ---------------- */
+/* ---------------- PLACEMENT RULES ---------------- */
 
-/* A. Advertisement above prompt/input box */
+/* A. Above the prompt box. An absolute overlay on the composer container: the
+   host takes no height, so the composer and page never move. */
 :host([data-placement="above_composer"]) {
   position: absolute;
   bottom: 100%;
@@ -57,98 +59,57 @@ const CSS = `
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
 }
 
-/* B. Advertisement at the end of a user prompt */
-:host([data-placement="under_prompt"]) {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  right: 110px;
-  max-width: calc(100% - 110px);
-  z-index: 20;
-  pointer-events: auto;
-  display: flex;
-  align-items: center;
-}
-:host([data-placement="under_prompt"]) .mt-wrap {
-  margin: 0;
-  width: 100%;
-  max-width: 100%;
-  height: 42px;
-  min-height: 42px;
-  padding: 5px 12px;
-  gap: 12px;
-}
-
-/* C. Advertisement near thinking indicator */
+/* B. In the thinking bubble. A normal flow row in the conversation, mounted
+   immediately after the user's turn, exactly where the assistant's thinking
+   indicator appears on every supported platform (including Angular Gemini).
+   It is centred on the assistant content column and sizes to its content, so
+   the paid copy gets the space that a badge/progress bar used to take. */
 :host([data-placement="thinking_indicator"]) {
   display: block;
   width: 100%;
   position: relative;
-  margin: 6px 0;
+  margin: 2px 0 12px;
+  max-width: 100%;
   pointer-events: auto;
   z-index: 10;
 }
 :host([data-placement="thinking_indicator"]) .mt-wrap {
+  position: relative;
   margin: 0 auto;
   max-width: 768px;
   width: calc(100% - 24px);
-  height: 42px;
-  min-height: 42px;
-  padding: 5px 12px;
+  height: auto;
+  min-height: 46px;
+  padding: 8px 14px;
   gap: 12px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-}
-
-/* D. Advertisement below AI response (inside action controls row) */
-:host([data-placement="ai_footer"]) {
-  display: inline-flex;
-  align-items: center;
-  position: relative;
-  height: 32px;
-  max-height: 32px;
-  margin-left: 8px;
-  flex: 0 1 auto;
-  max-width: calc(100% - 170px);
-  overflow: hidden;
-  pointer-events: auto;
-  z-index: 10;
-  vertical-align: middle;
-}
-:host([data-placement="ai_footer"]) .mt-wrap {
-  margin: 0;
-  width: auto;
-  max-width: 100%;
-  height: 30px;
-  min-height: 30px;
-  padding: 2px 8px;
-  gap: 8px;
-}
-
-/* Non-OpenAI / Gemini platform override: render flow-based container so it works in Angular layouts */
-:host([data-platform="gemini"]:not([data-placement="above_composer"])) {
-  position: relative !important;
-  display: block !important;
-  width: 100% !important;
-  margin: 8px 0 !important;
-  left: auto !important;
-  right: auto !important;
-  top: auto !important;
-  bottom: auto !important;
-  max-width: 100% !important;
-  z-index: 20 !important;
-  pointer-events: auto !important;
-}
-:host([data-platform="gemini"]:not([data-placement="above_composer"])) .mt-wrap {
-  position: relative !important;
-  margin: 0 auto !important;
-  max-width: 768px !important;
-  width: calc(100% - 24px) !important;
-  height: 42px !important;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
+  border-radius: 10px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
 }
 
 /* ---------------- CONTENT HIERARCHY & TYPOGRAPHY ---------------- */
+
+/* Bottom-edge view progress: reads like the card's bottom border filling
+   from left to right. It is absolutely positioned so it never takes space
+   from the paid copy. */
+.mt-progress {
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  bottom: 1px;
+  height: 3px;
+  border-radius: 0 0 9px 9px;
+  overflow: hidden;
+  pointer-events: none;
+  background: rgba(127, 127, 127, 0.16);
+}
+.mt-progress-fill {
+  display: block;
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: #2e9e5b;
+  transition: width .1s linear, background .2s ease;
+}
 
 .mt-main {
   flex: 1 1 auto;
@@ -173,30 +134,27 @@ const CSS = `
 .mt-body {
   margin: 0;
   font-size: 12px;
-  line-height: 1.25;
+  line-height: 1.3;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   opacity: 0.85;
 }
 
-/* Inline single-line compact layout for AI footer action row */
-:host([data-placement="ai_footer"]) .mt-main {
-  flex-direction: row;
-  align-items: center;
-  gap: 6px;
-}
-:host([data-placement="ai_footer"]) .mt-headline {
-  font-size: 12px;
-  line-height: 1;
-}
-:host([data-placement="ai_footer"]) .mt-body {
-  font-size: 11px;
-  line-height: 1;
+/* In the thinking bubble there is room for the full paid message: let the
+   body wrap to two lines instead of truncating it into an ellipsis. */
+:host([data-placement="thinking_indicator"]) .mt-body {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
 }
 
 .mt-cta {
   flex: none;
+  max-width: 38%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 12px;
   font-weight: 600;
   text-decoration: none;
@@ -205,12 +163,6 @@ const CSS = `
   cursor: pointer;
   white-space: nowrap;
   transition: background .15s ease, border-color .15s ease, color .15s ease;
-}
-
-:host([data-placement="ai_footer"]) .mt-cta {
-  padding: 3px 8px;
-  font-size: 11px;
-  line-height: 1.2;
 }
 
 .mt-controls {
@@ -247,8 +199,6 @@ const CSS = `
   min-width: 172px;
 }
 
-:host([data-placement="under_prompt"]) .mt-menu,
-:host([data-placement="ai_footer"]) .mt-menu,
 :host([data-placement="thinking_indicator"]) .mt-menu {
   top: auto;
   bottom: 100%;
@@ -266,12 +216,6 @@ const CSS = `
   padding: 6px 8px;
   border-radius: 5px;
   cursor: pointer;
-}
-
-@media (max-width: 640px) {
-  .mt-body {
-    display: none;
-  }
 }
 
 .mt-wrap.mt-fade {
@@ -377,12 +321,10 @@ export class AdWidget {
   readonly timer: ViewportTimer;
   readonly hover: HoverTracker;
   readonly requiredDurationMs: number;
-  private isHovering = false;
+  private hovering = false;
   private unhoverTimer: number | null = null;
-  private isEarned = false;
-  private pendingDestroyOnLeave = false;
-  private pendingEarnedFade = false;
-  private pendingCloseReason: "dismissed" | "snoozed" | "stream_started" | "earned" | null = null;
+  private holdCapTimer: number | null = null;
+  private holdCallback: (() => void) | null = null;
   private disposed = false;
 
   constructor(
@@ -435,6 +377,7 @@ export class AdWidget {
     controls.className = "mt-controls";
 
     const snoozeBtn = document.createElement("button");
+    snoozeBtn.type = "button"; // never submit the host site's composer form
     snoozeBtn.className = "mt-icon-btn";
     snoozeBtn.title = "Pause MeanTime ads";
     snoozeBtn.setAttribute("aria-label", "Pause MeanTime ads");
@@ -443,17 +386,13 @@ export class AdWidget {
     snoozeBtn.textContent = "⏸";
 
     const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
     closeBtn.className = "mt-icon-btn";
     closeBtn.title = "Dismiss this ad";
     closeBtn.setAttribute("aria-label", "Dismiss this ad");
     closeBtn.textContent = "×";
     closeBtn.addEventListener("click", () => {
-      this.isHovering = false;
-      this.pendingDestroyOnLeave = false;
-      if (this.unhoverTimer !== null) {
-        clearTimeout(this.unhoverTimer);
-        this.unhoverTimer = null;
-      }
+      this.cancelHoverHold();
       this.callbacks.onDismiss("dismissed");
       this.destroy(false);
     });
@@ -471,15 +410,11 @@ export class AdWidget {
       ["Pause until I turn it back on", -1],
     ] as const) {
       const item = document.createElement("button");
+      item.type = "button";
       item.setAttribute("role", "menuitem");
       item.textContent = label;
       item.addEventListener("click", () => {
-        this.isHovering = false;
-        this.pendingDestroyOnLeave = false;
-        if (this.unhoverTimer !== null) {
-          clearTimeout(this.unhoverTimer);
-          this.unhoverTimer = null;
-        }
+        this.cancelHoverHold();
         this.callbacks.onDismiss("snoozed", minutes);
         this.destroy(false);
       });
@@ -512,46 +447,49 @@ export class AdWidget {
 
     controls.append(snoozeBtn, closeBtn, this.menu);
 
-    // Only core content + CTA + controls (no debugging, progress bar, or earned badge)
-    this.wrap.append(main, cta, controls);
+    // Bottom-border progress: the only non-content chrome, and it overlays
+    // the card edge instead of consuming a content row.
+    const progress = document.createElement("div");
+    progress.className = "mt-progress";
+    progress.setAttribute("role", "progressbar");
+    progress.setAttribute("aria-label", "Ad view progress");
+    progress.setAttribute("aria-valuemin", "0");
+    progress.setAttribute("aria-valuemax", "100");
+    progress.setAttribute("aria-valuenow", "0");
+    const progressFill = document.createElement("span");
+    progressFill.className = "mt-progress-fill";
+    progress.append(progressFill);
+
+    this.wrap.append(main, cta, controls, progress);
     this.shadow.append(style, this.wrap);
 
     this.timer = new ViewportTimer(this.host, this.requiredDurationMs);
+    this.timer.onProgress = (ratio) => {
+      const percent = Math.max(0, Math.min(100, Math.round(ratio * 100)));
+      progressFill.style.width = `${percent}%`;
+      progress.setAttribute("aria-valuenow", String(percent));
+    };
     this.hover = new HoverTracker(this.host);
 
-    // Track active hover: timer keeps ticking forward.
-    // If user is hovering over the ad, the ad does NOT disappear until pointer leaves.
+    // A hover keeps the ad on screen (and keeps the viewport clock running),
+    // so a reader is never yanked away mid-sentence. Transitions between the
+    // widget's own children arrive as leave/enter pairs; the 250 ms grace
+    // means moving from the headline to the CTA is still one hover.
     const onEnter = () => {
       if (this.unhoverTimer !== null) {
         clearTimeout(this.unhoverTimer);
         this.unhoverTimer = null;
       }
-      this.isHovering = true;
+      this.hovering = true;
     };
 
     const onLeave = () => {
       if (this.unhoverTimer !== null) clearTimeout(this.unhoverTimer);
       this.unhoverTimer = window.setTimeout(() => {
         this.unhoverTimer = null;
-        try {
-          if (this.host.isConnected && (this.host.matches(":hover") || this.wrap.matches(":hover"))) {
-            return; // Browser confirms pointer is still hovering!
-          }
-        } catch {
-          // ignore
-        }
-        this.isHovering = false;
-        if (this.pendingDestroyOnLeave) {
-          this.pendingDestroyOnLeave = false;
-          const reason = this.pendingCloseReason ?? (this.isEarned ? "earned" : "stream_started");
-          this.pendingCloseReason = null;
-          if (this.isEarned || reason === "earned") {
-            this.callbacks.onEarned();
-          } else {
-            this.callbacks.onDismiss(reason);
-          }
-          this.destroy(this.pendingEarnedFade);
-        }
+        if (this.pointerStillOver()) return; // pointer came back / never truly left
+        this.hovering = false;
+        this.releaseHold();
       }, 250);
     };
 
@@ -565,30 +503,69 @@ export class AdWidget {
     this.wrap.addEventListener("pointerleave", onLeave, { passive: true });
     this.wrap.addEventListener("mouseleave", onLeave, { passive: true });
 
+    // The timer only reports that the required view was earned. The controller
+    // decides whether to close now or hold the ad for an active hover.
     this.timer.onEarned = () => {
-      this.isEarned = true;
-      if (this.isUserHovering) {
-        // While user is hovering, keep the ad visible for entire hover duration!
-        this.pendingDestroyOnLeave = true;
-        this.pendingEarnedFade = true;
-        this.pendingCloseReason = "earned";
-      } else {
-        this.callbacks.onEarned();
-        this.destroy(true);
-      }
+      this.callbacks.onEarned();
     };
   }
 
   get isUserHovering(): boolean {
     if (this.disposed) return false;
+    if (this.pointerStillOver()) return true;
+    return this.hovering;
+  }
+
+  private pointerStillOver(): boolean {
+    if (!this.host.isConnected) return false;
     try {
-      if (this.host.isConnected && (this.host.matches(":hover") || this.wrap.matches(":hover"))) {
-        return true;
-      }
+      return this.host.matches(":hover") || this.wrap.matches(":hover");
     } catch {
-      // ignore
+      return false;
     }
-    return this.isHovering;
+  }
+
+  /**
+   * Hold an already-finished ad open for as long as the pointer rests on it,
+   * then run `close`. Returns false when the widget is not hovered and the
+   * caller should close immediately. The hold is capped by HOVER_HOLD_MAX_MS.
+   */
+  holdUntilPointerLeave(close: () => void): boolean {
+    // Use the live pointer state, not the 250 ms leave-grace flag: a close that
+    // arrives just as the pointer leaves must not wait for a leave event that
+    // already happened.
+    if (this.disposed || !this.pointerStillOver()) return false;
+    this.holdCallback = close;
+    if (this.holdCapTimer !== null) clearTimeout(this.holdCapTimer);
+    this.holdCapTimer = window.setTimeout(() => {
+      this.holdCapTimer = null;
+      this.hovering = false;
+      this.releaseHold();
+    }, HOVER_HOLD_MAX_MS);
+    return true;
+  }
+
+  private releaseHold(): void {
+    if (this.holdCapTimer !== null) {
+      clearTimeout(this.holdCapTimer);
+      this.holdCapTimer = null;
+    }
+    const close = this.holdCallback;
+    this.holdCallback = null;
+    if (close) close();
+  }
+
+  private cancelHoverHold(): void {
+    if (this.unhoverTimer !== null) {
+      clearTimeout(this.unhoverTimer);
+      this.unhoverTimer = null;
+    }
+    if (this.holdCapTimer !== null) {
+      clearTimeout(this.holdCapTimer);
+      this.holdCapTimer = null;
+    }
+    this.holdCallback = null;
+    this.hovering = false;
   }
 
   setTheme(theme: "light" | "dark"): void {
@@ -608,7 +585,7 @@ export class AdWidget {
       this.wrap.dataset.platform = platform;
     }
     if (placement) {
-      this.applyHostStyles(placement, platform);
+      this.applyHostStyles(placement);
     }
     if (theme) {
       this.setTheme(theme);
@@ -628,67 +605,28 @@ export class AdWidget {
     this.hover.start();
   }
 
-  private applyHostStyles(placement: string, platform?: string): void {
-    if (platform === "gemini") {
-      this.host.style.position = "relative";
-      this.host.style.display = "block";
-      this.host.style.width = "100%";
-      this.host.style.margin = "8px 0";
-      this.host.style.left = "auto";
-      this.host.style.right = "auto";
-      this.host.style.top = "auto";
-      this.host.style.bottom = "auto";
-      this.host.style.maxWidth = "100%";
-      this.host.style.pointerEvents = "auto";
-      this.host.style.zIndex = "20";
-      return;
-    }
+  private applyHostStyles(placement: string): void {
+    // Reset every inline property either placement may set, so re-anchoring
+    // from one slot to the other never leaves a stale rule behind.
+    this.host.style.cssText = "";
     if (placement === "above_composer") {
       this.host.style.position = "absolute";
       this.host.style.bottom = "100%";
       this.host.style.left = "0";
       this.host.style.right = "0";
-      this.host.style.marginBottom = "8px";
       this.host.style.height = "0";
-      this.host.style.minHeight = "0";
-      this.host.style.lineHeight = "0";
-      this.host.style.margin = "0";
-      this.host.style.padding = "0";
-      this.host.style.border = "none";
       this.host.style.overflow = "visible";
       this.host.style.pointerEvents = "none";
       this.host.style.zIndex = "40";
-    } else if (placement === "under_prompt") {
-      this.host.style.position = "absolute";
-      this.host.style.top = "0";
-      this.host.style.bottom = "0";
-      this.host.style.left = "0";
-      this.host.style.right = "110px";
-      this.host.style.maxWidth = "calc(100% - 110px)";
-      this.host.style.height = "42px";
-      this.host.style.zIndex = "20";
-      this.host.style.pointerEvents = "auto";
-    } else if (placement === "ai_footer") {
-      this.host.style.position = "relative";
-      this.host.style.display = "inline-flex";
-      this.host.style.alignItems = "center";
-      this.host.style.height = "32px";
-      this.host.style.maxHeight = "32px";
-      this.host.style.marginLeft = "8px";
-      this.host.style.flex = "0 1 auto";
-      this.host.style.maxWidth = "calc(100% - 170px)";
-      this.host.style.overflow = "hidden";
-      this.host.style.pointerEvents = "auto";
-      this.host.style.zIndex = "10";
-      this.host.style.verticalAlign = "middle";
-    } else if (placement === "thinking_indicator") {
-      this.host.style.position = "relative";
-      this.host.style.display = "block";
-      this.host.style.width = "100%";
-      this.host.style.margin = "6px 0";
-      this.host.style.pointerEvents = "auto";
-      this.host.style.zIndex = "10";
+      return;
     }
+    this.host.style.position = "relative";
+    this.host.style.display = "block";
+    this.host.style.width = "100%";
+    this.host.style.maxWidth = "100%";
+    this.host.style.margin = "6px 0";
+    this.host.style.pointerEvents = "auto";
+    this.host.style.zIndex = "10";
   }
 
   reanchor(target: HTMLElement | MountTarget): void {
@@ -701,7 +639,7 @@ export class AdWidget {
     if (pos === "append" && el.lastElementChild === this.host) return;
 
     if (this.host.dataset.placement) {
-      this.applyHostStyles(this.host.dataset.placement, this.host.dataset.platform);
+      this.applyHostStyles(this.host.dataset.placement);
     }
 
     if (pos === "before") {
@@ -713,19 +651,11 @@ export class AdWidget {
     }
   }
 
-  /** Fade out and remove. If user is currently hovering, defer until pointer leave. */
+  /** Fade out and remove. Hover holds are handled by the controller before this. */
   destroy(earnedFade: boolean): void {
     if (this.disposed) return;
-    if (this.isUserHovering) {
-      this.pendingDestroyOnLeave = true;
-      this.pendingEarnedFade = earnedFade;
-      return;
-    }
     this.disposed = true;
-    if (this.unhoverTimer !== null) {
-      clearTimeout(this.unhoverTimer);
-      this.unhoverTimer = null;
-    }
+    this.cancelHoverHold();
     this.timer.destroy();
     this.hover.destroy();
     const remove = () => {

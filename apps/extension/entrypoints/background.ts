@@ -5,7 +5,7 @@ import {
   type PrefetchResponse,
   type TelemetryBatchResponse,
 } from "@meantime/shared";
-import { cacheSize, getCachedAds, requeueAd, setCachedAds, takeAd } from "../lib/ad-cache";
+import { cacheSize, getCachedAds, mergeCachedAds, requeueAd, takeAd } from "../lib/ad-cache";
 import { ApiError, apiFetch } from "../lib/api-client";
 import {
   ackBatch,
@@ -16,12 +16,14 @@ import {
   type QueuedImpression,
 } from "../lib/telemetry-queue";
 import {
+  DEFAULT_AD_REQUEST_LIMIT,
   getSettings,
   PAUSE_UNTIL_RESTART,
   saveSettings,
   STORAGE_KEYS,
   storageGet,
   storageSet,
+  type AdRequestLimit,
   type Identity,
   type PromptCounter,
 } from "../lib/storage";
@@ -144,7 +146,11 @@ class MeanTimeBackground {
     maxDurationSec: number,
     identity: Identity,
   ): Promise<void> {
+    // A 429 already told us when to try again; do not hammer the endpoint on
+    // every prompt while the cache is empty.
+    if (await this.prefetchCooldownActive()) return;
     try {
+      const pool = await getCachedAds();
       const res = await apiFetch<PrefetchResponse>("/ads/prefetch", {
         method: "POST",
         json: {
@@ -152,23 +158,23 @@ class MeanTimeBackground {
           count: EXTENSION_CACHE.PREFETCH_BATCH_SIZE,
           platforms: platform ? [platform] : [],
           maxDurationSec,
+          excludeCampaignIds: [...new Set(pool.map((a) => a.campaignId))],
         },
       });
-      const pool = await getCachedAds();
-      const knownLeaseIds = new Set(pool.map((a) => a.leaseId));
-      const fresh = res.ads.filter((a) => !knownLeaseIds.has(a.leaseId));
-      if (fresh.length > 0) {
-        await setCachedAds([...pool, ...fresh]);
-      }
-      await storageSet("pacing_state", res.pacing);
-    } catch {
-      // API down or unreachable — continue with existing cache
+      await mergeCachedAds(res.ads);
+      await storageSet(STORAGE_KEYS.PACING_STATE, { ...res.pacing, updatedAt: Date.now() });
+      await this.clearPrefetchLimit();
+    } catch (error) {
+      // API down or rate-limited — keep serving the existing cache.
+      await this.recordPrefetchLimit(error);
     }
   }
 
   private async prefetchIfNeeded(force = false): Promise<void> {
     const identity = await storageGet<Identity | null>(STORAGE_KEYS.IDENTITY, null);
     if (!identity) return;
+
+    if (!force && (await this.prefetchCooldownActive())) return;
 
     const size = await cacheSize();
     if (!force && size >= EXTENSION_CACHE.LOW_WATER_MARK) return;
@@ -179,6 +185,7 @@ class MeanTimeBackground {
       const settings = await getSettings();
       const lastPlatform = await storageGet<string | null>(LAST_PLATFORM_KEY, null);
       const count = EXTENSION_CACHE.PREFETCH_BATCH_SIZE;
+      const pool = await getCachedAds();
       const res = await apiFetch<PrefetchResponse>("/ads/prefetch", {
         method: "POST",
         json: {
@@ -186,18 +193,45 @@ class MeanTimeBackground {
           count,
           platforms: lastPlatform ? [lastPlatform] : [],
           maxDurationSec: settings.maxAdDurationSec,
+          excludeCampaignIds: [...new Set(pool.map((a) => a.campaignId))],
         },
       });
-      const pool = await getCachedAds();
-      const knownLeaseIds = new Set(pool.map((a) => a.leaseId));
-      const fresh = res.ads.filter((a) => !knownLeaseIds.has(a.leaseId));
-      await setCachedAds([...pool, ...fresh]);
-      await storageSet("pacing_state", res.pacing);
-    } catch {
-      // Offline or API down — keep serving the existing cache.
+      await mergeCachedAds(res.ads);
+      await storageSet(STORAGE_KEYS.PACING_STATE, { ...res.pacing, updatedAt: Date.now() });
+      await this.clearPrefetchLimit();
+    } catch (error) {
+      // Offline, API down, or rate-limited — keep serving the existing cache.
+      await this.recordPrefetchLimit(error);
     } finally {
       await this.releaseLock(PREFETCH_LOCK_KEY);
     }
+  }
+
+  private async prefetchCooldownActive(): Promise<boolean> {
+    const limit = await storageGet<AdRequestLimit>(
+      STORAGE_KEYS.AD_REQUEST_LIMIT,
+      DEFAULT_AD_REQUEST_LIMIT,
+    );
+    return limit.limitedUntil > Date.now();
+  }
+
+  private async recordPrefetchLimit(error: unknown): Promise<void> {
+    if (!(error instanceof ApiError) || error.status !== 429) return;
+    const retryAfterSec = Math.max(1, Math.ceil(error.retryAfterSec || 60));
+    const now = Date.now();
+    await storageSet(STORAGE_KEYS.AD_REQUEST_LIMIT, {
+      limitedUntil: now + retryAfterSec * 1_000,
+      retryAfterSec,
+      scope: "prefetch",
+      updatedAt: now,
+    });
+  }
+
+  private async clearPrefetchLimit(): Promise<void> {
+    await storageSet(STORAGE_KEYS.AD_REQUEST_LIMIT, {
+      ...DEFAULT_AD_REQUEST_LIMIT,
+      updatedAt: Date.now(),
+    });
   }
 
   /* ------------------------------- telemetry ----------------------------- */

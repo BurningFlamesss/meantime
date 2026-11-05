@@ -16,6 +16,10 @@
       "types": "./dist/db/*.d.ts",
       "default": "./dist/db/*.js"
     },
+    "./constants": {
+      "types": "./dist/constants.d.ts",
+      "default": "./dist/constants.js"
+    },
     "./crypto": {
       "types": "./dist/crypto.d.ts",
       "default": "./dist/crypto.js"

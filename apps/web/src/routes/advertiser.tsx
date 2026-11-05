@@ -25,6 +25,14 @@ export const Route = createFileRoute("/advertiser")({
   component: AdvertiserPortal,
 });
 
+/**
+ * During development an advertiser sees the raw moderation verdict so a bad
+ * prompt or classifier can be debugged quickly. Production advertisers see a
+ * neutral "submitted for review" state instead of a scary error; the campaign
+ * still appears in the portal under the collapsible "Under review" section.
+ */
+const DEV_MODE = (import.meta as { env?: { DEV?: boolean } }).env?.DEV === true;
+
 const GEO_CLUSTERS = [
   "NA-EAST", "NA-WEST", "EU-WEST", "EU-CENTRAL", "EU-EAST",
   "APAC-EAST", "APAC-SE", "LATAM", "AF-NORTH",
@@ -38,6 +46,8 @@ interface CampaignRow {
   cpiMicro: string;
   spentTotalMicro: string;
   moderationDecision?: string;
+  moderationScore?: number | null;
+  moderationReasons?: string[];
 }
 
 interface VariantRow {
@@ -254,12 +264,17 @@ function AdvertiserPortalContent({ onSignedOut }: { onSignedOut: () => void }) {
         moderation: ModerationOutcome;
       }>("/advertiser/campaigns", { method: "POST", json: form });
       setModeration(res.moderation);
+      const rejected = res.moderation.decision === "auto_rejected";
       setMessage(
-        res.moderation.decision === "auto_approved"
-          ? "Approved automatically and now live."
-          : res.moderation.decision === "needs_review"
-            ? "Sent to a reviewer — you'll be notified."
-            : "Rejected by automatic policy checks.",
+        DEV_MODE
+          ? rejected
+            ? "Rejected by automatic policy checks."
+            : res.moderation.decision === "needs_review"
+              ? "Sent to a reviewer — you'll be notified."
+              : "Approved automatically and now live."
+          : res.moderation.decision === "auto_approved"
+            ? "Approved automatically and now live."
+            : "Submitted for review. Track it under \"Under review\" below — no action is needed from you.",
       );
       await refresh();
       setSelected(res.campaign.id);
@@ -296,6 +311,9 @@ function AdvertiserPortalContent({ onSignedOut }: { onSignedOut: () => void }) {
       setVariantMsg(String(err));
     }
   }
+
+  const liveCampaigns = campaigns.filter((c) => c.moderationDecision === "auto_approved");
+  const reviewCampaigns = campaigns.filter((c) => c.moderationDecision !== "auto_approved");
 
   function toggleGeo(cluster: string): void {
     setForm((f) => ({
@@ -428,7 +446,7 @@ function AdvertiserPortalContent({ onSignedOut }: { onSignedOut: () => void }) {
 
           <button type="submit" className="btn-primary w-full">Create campaign</button>
 
-          {moderation && (
+          {moderation && (DEV_MODE || moderation.decision === "auto_approved") && (
             <div className={`rounded-lg border p-3 text-sm ${
               moderation.decision === "auto_approved" ? "border-accent/30 bg-accent-soft text-accent"
               : moderation.decision === "needs_review" ? "border-amber-300 bg-amber-50 text-amber-800"
@@ -455,28 +473,49 @@ function AdvertiserPortalContent({ onSignedOut }: { onSignedOut: () => void }) {
           <section>
             <h2 className="mb-3 text-sm font-semibold text-neutral-900">Campaigns</h2>
             <Table head={["Name", "Status", "Moderation", "Spend"]}>
-              {campaigns.map((c) => (
+              {liveCampaigns.map((c) => (
                 <tr key={c.id} onClick={() => setSelected(c.id)}
                   className={`cursor-pointer ${selected === c.id ? "bg-neutral-50" : "hover:bg-neutral-50"}`}>
                   <td className="px-4 py-3 font-medium text-neutral-900">{c.name}</td>
                   <td className="px-4 py-3 capitalize">{c.status}</td>
-                  <td className="px-4 py-3">
-                    {c.moderationDecision && (
-                      <Badge tone={
-                        c.moderationDecision === "auto_approved" ? "good"
-                        : c.moderationDecision === "needs_review" ? "warn" : "bad"
-                      }>
-                        {c.moderationDecision.replace("_", " ")}
-                      </Badge>
-                    )}
-                  </td>
+                  <td className="px-4 py-3"><Badge tone="good">approved</Badge></td>
                   <td className="tabular px-4 py-3">{formatMicroCents(Number(c.spentTotalMicro))}</td>
                 </tr>
               ))}
-              {campaigns.length === 0 && (
-                <tr><td colSpan={4}><Empty title="No campaigns yet" hint="Create your first on the left." /></td></tr>
+              {liveCampaigns.length === 0 && (
+                <tr><td colSpan={4}><Empty title="No live campaigns yet" hint="Create your first on the left." /></td></tr>
               )}
             </Table>
+
+            {reviewCampaigns.length > 0 && (
+              <details className="mt-4 rounded-lg border border-neutral-200 bg-white px-4 py-3">
+                <summary className="cursor-pointer text-sm font-medium text-neutral-700">
+                  Under review ({reviewCampaigns.length})
+                </summary>
+                <p className="mt-1 text-xs text-neutral-500">
+                  These campaigns are not serving yet. Our team reviews them; no action is required from you.
+                </p>
+                <div className="mt-3">
+                  <Table head={["Name", "Status", "Moderation", "Score"]}>
+                    {reviewCampaigns.map((c) => (
+                      <tr key={c.id} onClick={() => setSelected(c.id)}
+                        className={`cursor-pointer ${selected === c.id ? "bg-neutral-50" : "hover:bg-neutral-50"}`}>
+                        <td className="px-4 py-3 font-medium text-neutral-900">{c.name}</td>
+                        <td className="px-4 py-3 capitalize">{c.status}</td>
+                        <td className="px-4 py-3">
+                          <Badge tone="warn">
+                            {DEV_MODE && c.moderationDecision
+                              ? c.moderationDecision.replace("_", " ")
+                              : "in review"}
+                          </Badge>
+                        </td>
+                        <td className="tabular px-4 py-3">{DEV_MODE ? (c.moderationScore ?? "—") : "—"}</td>
+                      </tr>
+                    ))}
+                  </Table>
+                </div>
+              </details>
+            )}
           </section>
 
           {analytics && (
@@ -494,6 +533,11 @@ function AdvertiserPortalContent({ onSignedOut }: { onSignedOut: () => void }) {
                 <Stat label="Verified 5s views" value={String(analytics.totals.verifiedViews)}
                   hint={`${(analytics.totals.completionRate * 100).toFixed(0)}% completion`} />
                 <Stat label="Intentional hovers" value={String(analytics.totals.intentionalHovers)} />
+                <Stat
+                  label="Hover time"
+                  value={formatMs(analytics.totals.totalHoverMs)}
+                  hint={`${formatMs(analytics.totals.avgHoverMs)} avg / view`}
+                />
                 <Stat label="Clicks" value={String(analytics.totals.clicks)}
                   hint={`${(analytics.totals.ctr * 100).toFixed(2)}% CTR`} />
               </div>
@@ -562,7 +606,7 @@ function AdvertiserPortalContent({ onSignedOut }: { onSignedOut: () => void }) {
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">
                   By geography
                 </h3>
-                <Table head={["Cluster", "Unique users", "Views", "Verified", "Hovers", "Clicks", "Avg retention"]}>
+                <Table head={["Cluster", "Unique users", "Views", "Verified", "Hovers", "Hover time", "Clicks", "Avg retention"]}>
                   {analytics.geo.map((g) => (
                     <tr key={g.geoCluster}>
                       <td className="px-4 py-3 font-medium text-neutral-900">{g.geoCluster}</td>
@@ -570,12 +614,13 @@ function AdvertiserPortalContent({ onSignedOut }: { onSignedOut: () => void }) {
                       <td className="tabular px-4 py-3">{g.views}</td>
                       <td className="tabular px-4 py-3">{g.verifiedViews}</td>
                       <td className="tabular px-4 py-3">{g.intentionalHovers}</td>
+                      <td className="tabular px-4 py-3">{formatMs(g.totalHoverMs)}</td>
                       <td className="tabular px-4 py-3">{g.clicks}</td>
                       <td className="tabular px-4 py-3">{formatMs(g.avgRetentionMs)}</td>
                     </tr>
                   ))}
                   {analytics.geo.length === 0 && (
-                    <tr><td colSpan={7}><Empty title="No geo data yet" /></td></tr>
+                    <tr><td colSpan={8}><Empty title="No geo data yet" /></td></tr>
                   )}
                 </Table>
               </div>

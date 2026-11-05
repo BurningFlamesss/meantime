@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, desc, eq, gt, inArray, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, inArray, ne, or, sql } from "drizzle-orm";
 import argon2 from "argon2";
 import { createHash } from "node:crypto";
 import {
@@ -23,10 +23,17 @@ import {
   campaigns,
   campaignVariants,
   devices,
+  impressions,
   referrals,
   userNetworkEvents,
   users,
 } from "@meantime/shared/db";
+import {
+  campaignWeight,
+  filterSelectable,
+  weightedSample,
+  type SelectionHistory,
+} from "../ads-selection.js";
 import type { AppContext } from "../context.js";
 import { randomToken, signAuthToken, requireUser } from "../context.js";
 import { ACCOUNTS, postTransfer } from "../ledger.js";
@@ -331,7 +338,9 @@ export async function adsRoutes(app: FastifyInstance, ctx: AppContext) {
         ),
       )
       .orderBy(desc(campaigns.cpiMicro))
-      .limit(count * 3);
+      // Over-fetch because geo/platform/duration filters run in memory. Too
+      // small a window starves the later filtering and returns a short batch.
+      .limit(Math.min(200, count * 10));
 
     const eligible = rows.filter((c) => {
       if (c.spendDate === today && c.spentTodayMicro >= c.dailyBudgetMicro) return false;
@@ -345,11 +354,44 @@ export async function adsRoutes(app: FastifyInstance, ctx: AppContext) {
       return true;
     });
 
+    // Server-side per-user frequency + cooldown, mirroring the extension's
+    // local cache filter. Without this, clearing extension storage (or a second
+    // device) would defeat the per-day cap and let one campaign dominate.
+    const dayAgo = new Date(Date.now() - 86_400_000);
+    const recent = await ctx.db
+      .select({
+        campaignId: impressions.campaignId,
+        views: sql<number>`count(*)`,
+        lastShownAt: sql<Date>`max(${impressions.createdAt})`,
+      })
+      .from(impressions)
+      .where(and(eq(impressions.userId, auth.userId), gte(impressions.createdAt, dayAgo)))
+      .groupBy(impressions.campaignId);
+    const history = new Map<string, SelectionHistory>();
+    for (const row of recent) {
+      const last = row.lastShownAt instanceof Date ? row.lastShownAt.getTime() : new Date(row.lastShownAt).getTime();
+      history.set(row.campaignId, { views: Number(row.views), lastShownAt: last });
+    }
+
+    const selectable = filterSelectable(
+      eligible,
+      history,
+      Date.now(),
+      today,
+      new Set(body.excludeCampaignIds),
+    );
+
     const [device] = auth.deviceId
       ? await ctx.db.select().from(devices).where(eq(devices.id, auth.deviceId)).limit(1)
       : [null];
 
-    const chosenCampaigns = eligible.slice(0, count);
+    // Bid-weighted sample without replacement: honest rotation across the
+    // eligible pool instead of the same top-bid campaign filling every lease.
+    const chosenCampaigns = weightedSample(
+      selectable,
+      (campaign) => campaignWeight(campaign, history, today),
+      count,
+    );
     // One query for every selected campaign's approved variants instead of an
     // N+1 per campaign in the prefetch hot path.
     const variantRows =

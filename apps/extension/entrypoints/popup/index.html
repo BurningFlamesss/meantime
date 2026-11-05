@@ -339,6 +339,60 @@
         letter-spacing: .05em;
       }
 
+      /* Ad-only rate limit: fills as the hourly allowance is consumed and
+         turns amber/red before ads stop, without implying AI is throttled. */
+      .rate-limit {
+        margin: 10px 0 8px;
+        padding: 8px 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--field-bg);
+      }
+      .rate-limit-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+        font-size: 11px;
+      }
+      .rate-limit-head span:first-child {
+        font-weight: 600;
+      }
+      .rate-limit-head span:last-child {
+        color: var(--sub);
+        font-size: 10px;
+      }
+      .rate-track {
+        height: 6px;
+        margin-top: 6px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: rgba(127, 127, 127, 0.18);
+      }
+      .rate-fill {
+        display: block;
+        width: 0%;
+        height: 100%;
+        border-radius: inherit;
+        background: #2e9e5b;
+        transition: width .3s ease, background .2s ease;
+      }
+      .rate-limit.warn .rate-fill {
+        background: #d97706;
+      }
+      .rate-limit.limited .rate-fill {
+        background: #dc2626;
+      }
+      .rate-limit.limited .rate-limit-head span:first-child {
+        color: #dc2626;
+      }
+      .rate-detail {
+        margin: 5px 0 0;
+        font-size: 10px;
+        line-height: 1.3;
+        color: var(--sub);
+      }
+
       .links {
         margin-top: 10px;
         border-top: 1px solid var(--border);
@@ -382,7 +436,7 @@
     <section id="intro-view" class="intro" aria-labelledby="intro-title" hidden>
       <h2 id="intro-title">How MeanTime works</h2>
       <ul>
-        <li><b>Small, labelled text ad</b> appears under your prompt while AI generates.</li>
+        <li><b>Small, labelled text ad</b> appears while the AI is thinking — in the thinking bubble or above the prompt box.</li>
         <li><b>View time</b> earns the payout (55% revenue share).</li>
         <li><b>Your prompts stay private.</b> Prompt text is never read or stored.</li>
       </ul>
@@ -458,11 +512,12 @@
       <fieldset>
         <legend>Ad position</legend>
         <select id="placement">
-          <option value="under_prompt">End of user prompt</option>
-          <option value="above_composer">Above prompt box</option>
           <option value="thinking_indicator">In the thinking bubble</option>
-          <option value="ai_footer">End of AI prompt (below response)</option>
+          <option value="above_composer">Above prompt box</option>
         </select>
+        <p class="mode-desc" style="margin-left: 0;">
+          In the thinking bubble sits where the AI's thinking indicator appears. Above prompt box floats just above the composer.
+        </p>
       </fieldset>
 
       <!-- Control 4: Mode -->
@@ -524,6 +579,18 @@
         <div class="stat"><b id="stat-balance">–</b><span>earned</span></div>
         <div class="stat"><b id="stat-cache">–</b><span>ads cached</span></div>
         <div class="stat"><b id="stat-pending">–</b><span>pending sync</span></div>
+      </div>
+
+      <!-- Ad-only hourly rate limit / exhaustion bar -->
+      <div class="rate-limit" id="rate-limit" hidden>
+        <div class="rate-limit-head">
+          <span id="rate-limit-label">Ad capacity</span>
+          <span id="rate-limit-value">—</span>
+        </div>
+        <div class="rate-track" id="rate-track" role="progressbar" aria-label="Ad rate limit" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <span class="rate-fill" id="rate-fill"></span>
+        </div>
+        <p class="rate-detail" id="rate-detail">Only ad requests are limited — your AI chats are never throttled.</p>
       </div>
 
       <!-- Sync Button -->

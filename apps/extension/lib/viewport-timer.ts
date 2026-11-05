@@ -19,7 +19,10 @@ export class ViewportTimer {
   private rafHandle: number | null = null;
 
   onEarned: (() => void) | null = null;
+  /** Called whenever the whole-percent view progress changes (0..1). */
+  onProgress: ((ratio: number) => void) | null = null;
   private earnedFired = false;
+  private lastProgressPercent = -1;
 
   constructor(
     private readonly target: HTMLElement,
@@ -102,9 +105,19 @@ export class ViewportTimer {
       this.onEarned?.();
     }
 
+    this.emitProgress();
+
     if (this.rafHandle !== null) cancelAnimationFrame(this.rafHandle);
     this.rafHandle = this.activelyViewable ? requestAnimationFrame(this.tick) : null;
   };
+
+  private emitProgress(): void {
+    const ratio = Math.max(0, Math.min(1, this.cumulativeMs / this.requiredDurationMs));
+    const percent = Math.round(ratio * 100);
+    if (percent === this.lastProgressPercent) return;
+    this.lastProgressPercent = percent;
+    this.onProgress?.(ratio);
+  }
 
   get cumulativeMs(): number {
     const now = performance.now();

@@ -37,7 +37,7 @@ private beta · P2 = post-launch / polish
 - [x] HMAC-SHA256 lease signing/verification on WebCrypto.
 - [x] Shared constants for revenue split, viewability, pacing, cadence, trust,
       cache, telemetry, and moderation.
-- [x] Platform selector configs for five AI platforms.
+- [x] Platform selector configs for five AI platforms; only ChatGPT, Claude, and Gemini are activated.
 - [x] Double-entry ledger helpers.
 
 ### Phase 2 — Extension core and multi-LLM adapters
@@ -46,15 +46,17 @@ private beta · P2 = post-launch / polish
 - [x] Idle/startup prefetch with ring-buffer cache and low-water mark.
 - [x] Local deduplication (expiry, per-day cap, cooldown).
 - [x] Passive Enter/send-button trigger detection.
-- [x] Five platform adapters plus scoped Grok `x.com/i/grok` matching.
-- [x] Closed Shadow DOM ad widget with progress, earned badge, CTA, dismiss,
-      snooze menu, and placement options.
+- [x] ChatGPT, Claude, and Gemini adapters registered. Grok/DeepSeek adapters are retained but not activated, so the content script only runs on the three allowed domains.
+- [x] Closed Shadow DOM ad widget with a bottom-edge view-progress bar, CTA,
+      dismiss, snooze menu, and placement options.
 - [x] Cumulative viewport timer (IntersectionObserver + visibility + focus).
 - [x] Configurable campaign duration (2s–15s, default 5s) with duration-based CPI pricing ($0.002/sec minimum bid).
 - [x] User maximum ad duration preference (2s–15s, default 15s) in extension popup and web dashboard (`/dashboard` via `/me/settings`).
-- [x] Hover retention and countdown pausing: ad dismissal countdown pauses immediately when hovered, stays visible for the entire duration of hover interaction, and resumes remaining countdown on pointer leave without restarting; transitions between internal ad elements are ignored.
-- [x] Standardized zero-layout-shift ad placements: `above_composer` (matching `under_prompt` dimensions at 42px height, 5px 12px padding, 8px radius), `under_prompt` (expanded dimensions with stacked headline + body hierarchy preventing text clipping), `thinking_indicator` (anchored after user turn above reasoning/streamed response), and `ai_footer` (inline-flex inside response action controls row avoiding prose overlap).
-- [x] Streamlined ad visual hierarchy: removed debugging "AD · MEANTIME" badge, progress bar, and earned badge; clean presentation showing sponsor headline, secondary body text, CTA button, and pause/dismiss controls.
+- [x] Hover retention: a close requested while the pointer is on the ad is deferred until pointer leave (capped at 60 s), in both display modes; explicit dismiss/snooze stays immediate. Transitions between internal ad elements are ignored and the hover clock keeps running, so the full hover duration is reported as a campaign metric.
+- [x] Two ad placements only: `thinking_indicator` ("In the thinking bubble", a full-width flow row immediately after the user turn where the reasoning indicator renders) and `above_composer` ("Above prompt box", a zero-height overlay that never shifts the composer). Legacy saved `under_prompt` / `ai_footer` values migrate to the thinking slot.
+- [x] Clean ad content hierarchy: removed the "AD · MEANTIME" branding and earned badge. The only chrome is a bottom-border view-progress bar that fills 0→100% from the viewport timer instead of taking a content row.
+- [x] Cache correctness: reads ignore expired, malformed, and duplicate leases; every write normalizes the ring buffer; prefetch merges re-read the pool inside the cache serial chain so an in-flight request cannot resurrect a lease a tab just consumed; requeued leases append so a full cache cannot trim them away.
+- [x] Ad-only rate-limit meter: server 429 `Retry-After` is persisted, prefetch backs off during the cooldown, and the popup shows a green→amber→red exhaustion bar for both server and local pacing limits with "AI chats are unaffected" copy.
 - [x] Strict `wait_time_only` mode closing immediately on the first streamed AI reply token via thread-level container observing and 50ms polling loop.
 - [x] Intentional hover tracking (500 ms gate).
 - [x] PoHI keystroke/paste counters (no prompt text).
@@ -71,6 +73,20 @@ private beta · P2 = post-launch / polish
 - [x] Register/login with Argon2 and HMAC bearer tokens.
 - [x] Prefetch with pacing, platform/geo targeting, budget filtering, A/B
       rotation, and lease issuance.
+- [x] Bid-weighted selection without replacement, scaled by remaining daily
+      budget, per-user freshness, and per-day allowance; server-side frequency
+      cap/cooldown and client cache exclusions.
+- [x] Variable withdrawals: any amount from the $5.00 minimum up to the
+      available balance (e.g. $7.00 of $10.00), with the minimum enforced on
+      the requested amount as well as the balance.
+- [x] Advertiser hover metrics: total and average intentional hover time in
+      analytics totals and the per-geo breakdown.
+- [x] Below-threshold campaigns appear in the advertiser portal in a
+      collapsible "Under review" section instead of as a hard error; the
+      reviewer queue includes auto-rejected campaigns. Development builds keep
+      the raw verdict visible for tuning.
+- [x] Clearer Laya ad prompt (artifact context, concrete categories, low
+      quality separated from fraud, legitimate-majority review floor).
 - [x] Telemetry batch ingestion with lease verification and single-use checks.
 - [x] PoHI, viewport threshold, cadence, and pacing enforcement.
 - [x] 55/45 revenue share through the ledger.
@@ -245,8 +261,9 @@ private beta · P2 = post-launch / polish
 - [x] Extension apex domain match patterns: Fixed content script match pattern
       omission where `*://*.chatgpt.com/*` failed to match naked/apex domain
       `https://chatgpt.com/c/*`. Added explicit apex patterns (`*://chatgpt.com/*`,
-      `*://claude.ai/*`, `*://grok.com/*`, `*://x.com/i/grok*`, etc.) to both
+      `*://claude.ai/*`, `*://gemini.google.com/*`, etc.) to both
       `apps/extension/entrypoints/content.ts` and `apps/extension/lib/adapters/registry.ts`.
+      The allowlist is now deliberately limited to ChatGPT, Claude, and Gemini.
 - [x] ChatGPT DOM resilience & fallback mount: Hardened selectors in `packages/shared/src/platforms.ts`
       (removed tag restrictions on `[data-message-author-role='user']` and
       `[data-message-author-role='assistant']`, expanded `sendButtonSelector` and
@@ -429,7 +446,7 @@ raw IPs.
 - [x] Add `aria-label` to icon-only controls and Escape/outside-click menu close.
 - [ ] Add a focus trap for the menu.
 - [x] Add a first-run explainer and permissions rationale.
-- [x] Harden selector fallbacks and zero-layout-shift ad placements: "End of user prompt", "Above prompt box", "In the thinking bubble", and "End of AI prompt (below response)". Never mount inside composer form.
+- [x] Harden selector fallbacks for the two placements: "In the thinking bubble" and "Above prompt box", including Claude/Gemini/ChatGPT-specific anchors. Widget buttons are `type="button"` so they can never submit the host composer form.
 - [ ] Add an options page for API base, frequency, and placement.
 - [x] Add an explicit "ads paused" indicator.
 - [x] Add a popup pause picker and "until browser restart" mode, matching the

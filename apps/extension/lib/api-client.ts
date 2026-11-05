@@ -86,6 +86,8 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** Seconds the server asked us to wait (429 Retry-After). */
+    public retryAfterSec = 0,
   ) {
     super(message);
     this.name = "ApiError";
@@ -139,7 +141,14 @@ export async function apiFetch<T>(
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new ApiError(res.status, text || res.statusText);
+    let retryAfterSec = Number(res.headers.get("retry-after")) || 0;
+    try {
+      const parsed = JSON.parse(text) as { retryAfterSec?: unknown };
+      if (typeof parsed.retryAfterSec === "number") retryAfterSec = parsed.retryAfterSec;
+    } catch {
+      // Body was not JSON; the header (or the default) is still usable.
+    }
+    throw new ApiError(res.status, text || res.statusText, Math.max(0, retryAfterSec));
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;

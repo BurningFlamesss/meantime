@@ -18,11 +18,15 @@ export interface PlatformAdapter {
 
   matches(hostname: string, pathname: string): boolean;
 
-  /** Anchor under the user's just-submitted prompt bubble (primary position). */
+  /** Anchor under the user's just-submitted prompt bubble. */
   getUserMessageActionSlot(latestMessageNode: HTMLElement): MountTarget | HTMLElement | null;
-  /** Anchor at the footer of the AI response block. */
+  /** Anchor at the footer of the AI response block (adapter detail, not a user-facing slot). */
   getAiMessageFooterSlot(latestAiNode: HTMLElement): MountTarget | HTMLElement | null;
-  /** Anchor next to the "Thinking..." indicator. */
+  /**
+   * Anchor in the conversation flow where the assistant's thinking bubble
+   * appears: immediately after the latest user turn. This is the user-facing
+   * "In the thinking bubble" slot.
+   */
   getThinkingSlot(): MountTarget | HTMLElement | null;
   /** Anchor strictly above the prompt / composer box without layout shift. */
   getAboveComposerSlot(): MountTarget | HTMLElement | null;
@@ -90,11 +94,17 @@ export abstract class BaseAdapter implements PlatformAdapter {
   }
 
   getThinkingSlot(): MountTarget | HTMLElement | null {
-    const el = this.qs(this.config.thinkingIndicatorSelector);
-    if (!el) return null;
-    const target = el instanceof HTMLButtonElement || el.tagName === "BUTTON" ? (el.parentElement ?? el) : el;
-    target.style.position = "relative";
-    return { element: target, position: "append" };
+    // Insert after the user's turn, not inside it. That is where every
+    // supported platform renders its thinking/reasoning indicator, and it is
+    // stable before the indicator itself mounts (so the ad does not wait on
+    // a framework-specific spinner).
+    const user = this.findLatestUserMessage();
+    if (!user) return null;
+    const turn =
+      user.closest<HTMLElement>(
+        "article, [data-testid*='conversation-turn'], [data-turn-key], li[id], [data-content-search-unit-key], .group\\/user-message",
+      ) ?? user;
+    return { element: turn, position: "after" };
   }
 
   getAboveComposerSlot(): MountTarget | HTMLElement | null {

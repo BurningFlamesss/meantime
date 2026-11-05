@@ -90,26 +90,55 @@ function probabilityOf(judgement: LayaJudgement, key: string): number {
  * fraud ~0.9), so the score is derived from that distribution.
  */
 
-/** Ad-copy questions. Neutral category labels keep the checkpoint calibrated. */
+/**
+ * Ad-copy questions.
+ *
+ * The prompt has to teach the checkpoint what this artefact actually is. A
+ * bare "Is this an advertisement?" style question scores every ad as spam /
+ * fraud (it is, by definition, an advertisement), which is why a neutral
+ * category question with concrete examples is used. The context line in the
+ * state is part of the prompt: it tells the classifier this is a short,
+ * labelled sponsor line in a browser extension, not an unsolicited email or a
+ * landing page, and that ordinary marketing language is allowed.
+ */
+const AD_CONTEXT =
+  "Context: this is a short, clearly labelled sponsored text line (an 'Ad') " +
+  "shown to a consenting user in a browser extension while they wait for an AI " +
+  "assistant. It is not an email, a pop-up, or a full web page. It has one " +
+  "headline, one short body line, a button label, and a destination URL that " +
+  "belongs to the advertiser. Small software, developer-tool, course, and " +
+  "product ads are normally legitimate. Confident, salesy, or superlative " +
+  "marketing wording is not by itself deceptive. Judge the substance: is the " +
+  "offer honest, or is it misleading or criminal?";
+
 const AD_QUESTIONS: Record<string, LayaQuestion> = {
   shape: {
     type: "choice",
-    instructions: "Which best describes `post`?",
+    instructions:
+      "Read `context` and `post`. Choose the single best description of the advertisement. " +
+      "Prefer legitimate_ad for an ordinary product ad with a plausible claim; use low_quality only for " +
+      "harmless but genuinely poor marketing; use deceptive only when a reasonable reader would be misled; " +
+      "use fraud only for a clear scam or illegal offer.",
     criteria: {
-      legitimate_ad: "an honest advertisement for a real product or service",
-      low_quality: "low-effort or annoying marketing",
-      deceptive: "misleading or exaggerated claims",
-      fraud: "a scam or fraud designed to steal money or data",
+      legitimate_ad:
+        "an honest advertisement for a real product or service; normal marketing language, superlatives, and a call to action are acceptable",
+      low_quality:
+        "low-effort, vague, or annoying marketing that makes no false promise and does not try to obtain money, credentials, or personal data",
+      deceptive:
+        "misleading or exaggerated claims that could fool a reasonable reader: fake discounts, guaranteed outcomes, hidden costs, fake urgency",
+      fraud:
+        "a scam or criminal offer: phishing, fake prizes or giveaways, investment or crypto returns, credential or payment theft, illegal products",
     },
   },
   severity: {
     type: "score",
-    instructions: "How severe is any policy violation in `post`?",
+    instructions:
+      "How severe is any policy violation in `post`? A normal advertisement with no false claim is 0.",
     criteria: [
-      "no violation",
-      "minor: low-quality or mildly misleading wording",
-      "clear violation: deceptive or high-pressure offer",
-      "severe: fraud, scam, or illegal product",
+      "no violation: an ordinary advertisement",
+      "minor: low-quality or mildly exaggerated wording, but still an honest offer",
+      "clear violation: a misleading claim or high-pressure deceptive offer",
+      "severe: fraud, scam, phishing, or an illegal product",
     ],
   },
 };
@@ -280,10 +309,11 @@ export async function moderateCampaign(
   const laya = await layaJudge(
     cfg,
     {
+      context: AD_CONTEXT,
       post: [
         `Headline: ${input.headline}`,
         `Body: ${input.bodyText}`,
-        `Call to action: ${input.ctaText}`,
+        `Button: ${input.ctaText}`,
         `Destination: ${input.targetUrl}`,
       ].join("\n"),
     },
@@ -303,16 +333,19 @@ export async function moderateCampaign(
 
   layers.push("laya");
 
-  // Fraud dominates; a deceptive-but-not-fraudulent ad costs half as much.
+  // Fraud dominates; a deceptive-but-not-fraudulent ad costs less, and
+  // low-quality-but-honest copy barely moves the score. Low quality is not
+  // fraud and must never by itself trigger a rejection.
   const fraud = probabilityOf(laya, "fraud");
   const deceptive = probabilityOf(laya, "deceptive");
   const lowQuality = probabilityOf(laya, "low_quality");
+  const legitimate = probabilityOf(laya, "legitimate_ad");
   if (fraud >= 0.5) reasons.push("laya:fraud");
   else if (deceptive >= 0.5) reasons.push("laya:deceptive");
   else if (lowQuality >= 0.5) reasons.push("laya:low_quality");
-  if (laya.severity >= 0.83) reasons.push("laya:severe");
+  if (laya.severity >= 0.83 && legitimate < 0.5) reasons.push("laya:severe");
 
-  const risk = Math.min(1, fraud + deceptive * 0.5);
+  const risk = Math.min(1, fraud * 0.95 + deceptive * 0.55 + lowQuality * 0.15);
   let score = Math.round((1 - risk) * 100);
 
   // Reputation adjusts at the margins only — it cannot rescue bad content.
@@ -329,6 +362,13 @@ export async function moderateCampaign(
   }
 
   score = Math.max(0, Math.min(100, Math.round(score)));
+
+  // If the checkpoint itself says this is mostly a legitimate ad, it must not
+  // auto-reject on a residual fraud/deceptive tail. The floor lands in the
+  // human review band, preserving fail-closed moderation without calling an
+  // honest advertiser a fraudster. Applied after reputation so a new
+  // advertiser's age penalty cannot push a legitimate verdict into reject.
+  if (legitimate >= 0.5) score = Math.max(score, 60);
 
   // A non-English verdict is advisory only: unvalidated calibration means a
   // model score must not approve or reject an advertiser on its own.

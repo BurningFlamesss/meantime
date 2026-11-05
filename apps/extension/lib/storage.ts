@@ -1,4 +1,4 @@
-import type { DisplayMode, Placement, ThemePreference } from "@meantime/shared";
+import type { DisplayMode, PacingState, Placement, ThemePreference } from "@meantime/shared";
 
 /** Keys used in chrome.storage.local. */
 export const STORAGE_KEYS = {
@@ -9,7 +9,13 @@ export const STORAGE_KEYS = {
   IDENTITY: "identity",
   POHI_SNAPSHOT: "pohi_snapshot",
   PROMPT_COUNTER: "prompt_counter",
+  /** Mounted ads in the current hour; this is the ad-only pacing counter. */
+  AD_COUNTER: "ad_counter",
   FIRST_RUN_SEEN: "first_run_seen",
+  /** Latest server pacing snapshot, timestamped for staleness checks. */
+  PACING_STATE: "pacing_state",
+  /** Server-side prefetch (429) cooldown so every prompt does not retry. */
+  AD_REQUEST_LIMIT: "ad_request_limit",
 } as const;
 
 export interface ExtensionSettings {
@@ -24,12 +30,27 @@ export interface ExtensionSettings {
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   displayMode: "persist_until_5s",
-  placement: "under_prompt",
+  placement: "thinking_indicator",
   theme: "auto",
   maxAdDurationSec: 15,
   snoozedUntil: 0,
   enabled: true,
 };
+
+/**
+ * Placements used to have four values. Saved settings from that build still
+ * carry `under_prompt` / `ai_footer`, which no longer mount, so map them onto
+ * the nearest surviving slot instead of silently showing nothing.
+ */
+export function normalizePlacement(value: unknown): Placement {
+  if (value === "above_composer") return "above_composer";
+  if (value === "thinking_indicator") return "thinking_indicator";
+  return DEFAULT_SETTINGS.placement;
+}
+
+function normalizeSettings(settings: ExtensionSettings): ExtensionSettings {
+  return { ...settings, placement: normalizePlacement(settings.placement) };
+}
 
 /** `snoozedUntil` value meaning "paused until the user turns ads back on". */
 export const PAUSE_INDEFINITE = Number.MAX_SAFE_INTEGER;
@@ -103,6 +124,23 @@ export interface PromptCounter {
   count: number;
 }
 
+export type PacingSnapshot = PacingState & { updatedAt: number };
+
+/** Persistent cooldown recorded when the ad endpoint answers 429. */
+export interface AdRequestLimit {
+  limitedUntil: number;
+  retryAfterSec: number;
+  scope: string;
+  updatedAt: number;
+}
+
+export const DEFAULT_AD_REQUEST_LIMIT: AdRequestLimit = {
+  limitedUntil: 0,
+  retryAfterSec: 0,
+  scope: "prefetch",
+  updatedAt: 0,
+};
+
 export async function storageGet<T>(key: string, fallback: T): Promise<T> {
   const result = await chrome.storage.local.get(key);
   return (result[key] as T | undefined) ?? fallback;
@@ -116,12 +154,12 @@ let cachedSettings: ExtensionSettings = DEFAULT_SETTINGS;
 
 if (typeof chrome !== "undefined" && chrome.storage?.local) {
   void storageGet(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS).then((s) => {
-    cachedSettings = s;
+    cachedSettings = normalizeSettings(s);
   });
   chrome.storage.onChanged.addListener((changes, area) => {
     const change = changes[STORAGE_KEYS.SETTINGS];
     if (area === "local" && change?.newValue) {
-      cachedSettings = change.newValue as ExtensionSettings;
+      cachedSettings = normalizeSettings(change.newValue as ExtensionSettings);
     }
   });
 }
@@ -131,7 +169,11 @@ export function getCachedSettings(): ExtensionSettings {
 }
 
 export async function getSettings(): Promise<ExtensionSettings> {
-  const current = await storageGet(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS);
+  const stored = await storageGet(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS);
+  const current = normalizeSettings(stored);
+  if (current.placement !== stored.placement) {
+    await storageSet(STORAGE_KEYS.SETTINGS, current);
+  }
   cachedSettings = current;
   return current;
 }

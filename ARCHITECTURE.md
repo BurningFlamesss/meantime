@@ -35,7 +35,7 @@ flowchart LR
     LAYA["Laya classifier<br/>laya-serve · POST /v1/systemone"]
   end
 
-  AI["AI platforms<br/>ChatGPT · Gemini · Claude<br/>Grok · DeepSeek"]
+  AI["AI platforms<br/>ChatGPT · Gemini · Claude"]
 
   BG -- "prefetch / telemetry / clicks" --> API
   CS -- "reads DOM (never prompt text)" --> AI
@@ -235,6 +235,26 @@ Notes:
   `Number.MAX_SAFE_INTEGER` micro-dollars.
 - Pacing at prefetch counts *consumed leases* in the last hour. The extension
   also enforces pacing against a local prompt counter.
+- Selection is a bid-weighted sample **without replacement**
+  (`src/ads-selection.ts`), scaled by remaining daily budget, per-user
+  freshness, and the campaign's remaining per-day allowance. This keeps the
+  top bidder from filling every lease and rotates creatives across the pool.
+- The server also applies the per-user daily cap and cooldown from the last
+  24h of impressions, and skips campaigns the client already holds
+  (`excludeCampaignIds`), so a cleared extension cache cannot bypass frequency
+  caps and no lease is wasted on a duplicate.
+- Prefetch only runs on the allowlisted hosts (ChatGPT, Claude, Gemini); the
+  content-script match list and adapter registry are the two activation gates.
+- Cache size and reads ignore expired, malformed, and duplicate leases, so a
+  stale ring buffer cannot suppress the low-water refill. Every write
+  normalizes the buffer, and prefetch merges re-read the pool inside the same
+  serial chain as `takeAd`/`requeueAd`; an in-flight prefetch therefore cannot
+  resurrect a lease that a tab consumed while the request was pending.
+  Requeues append at the tail, matching the newest-kept trim policy.
+- A prefetch `429` persists the server's `Retry-After` in `ad_request_limit`;
+  background prefetch skips requests until it expires instead of retrying on
+  every prompt. The popup renders that cooldown, plus local pacing, as an
+  exhaustion bar and explicitly states that only ad requests are limited.
 
 ### 5.2 Trigger → impression → telemetry
 
@@ -283,6 +303,11 @@ accumulated total is monotonic across pause/resume. Payout requires
 - `wait_time_only`: the ad is removed when the AI starts streaming.
 - `persist_until_5s`: the ad remains anchored after streaming starts until the
   timer earns, then fades.
+- Hover hold: in either mode, if the pointer is on the ad when its close is
+  requested, the widget stays mounted (and the hover clock keeps accruing)
+  until the pointer leaves, capped at `HOVER_HOLD_MAX_MS` (60 s). An explicit
+  dismiss or snooze is never deferred. The full hover duration is sent as
+  `hoverMs`, so advertisers are billed metrics on real attention.
 - `earned` in the event is advisory; the server recomputes eligibility.
 
 ### 5.4 Revenue and ledger flow
@@ -331,7 +356,7 @@ flowchart LR
   POL -->|hard reject| REJ["auto_rejected"]
   POL -->|pass| LAYA["POST /v1/systemone<br/>{state: {post}, questions: shape · severity}"]
   LAYA -->|unreachable/timeout| REV["needs_review<br/>score 50"]
-  LAYA -->|answers| MAP["choice category<br/>P(fraud) + 0.5·P(deceptive) → 0–100"]
+  LAYA -->|answers| MAP["choice category<br/>0.95·P(fraud) + 0.55·P(deceptive)<br/>+ 0.15·P(low_quality) → 0–100"]
   MAP --> ADJ["reputation adjustment<br/>prior rejects · new advertiser · approvals"]
   ADJ --> DEC{"score bands"}
   DEC -->|">=85"| APP["auto_approved"]
@@ -344,10 +369,18 @@ Reputation can nudge a score at the margins but cannot rescue bad content.
 
 Laya answers one `choice` question over four mutually exclusive categories
 (`legitimate_ad`, `low_quality`, `deceptive`, `fraud`) plus a severity `score`.
-Risk is `P(fraud) + 0.5·P(deceptive)`. The alternative — a `noul` per offence
-("Is this advertisement spam?") — is not usable against the real checkpoint: it
-answers ~1.0 for any advertisement because an ad is, by definition, an
-advertisement.
+Risk is `0.95·P(fraud) + 0.55·P(deceptive) + 0.15·P(low_quality)`; the low
+quality category is not fraud and must never by itself trigger a rejection.
+The state includes an explicit context paragraph explaining that the artefact
+is a short, labelled sponsor line in a browser extension and that ordinary
+marketing language is permitted — without it the checkpoint reads any ad as
+spam. If the model's own `legitimate_ad` probability is ≥0.5, the score is
+floored at 60 (human review) so a residual tail cannot auto-reject an ad the
+model itself considers legitimate.
+
+The alternative — a `noul` per offence ("Is this advertisement spam?") — is not
+usable against the real checkpoint: it answers ~1.0 for any advertisement
+because an ad is, by definition, an advertisement.
 
 Task links use a second `choice` over `normal` / `promo` / `phishing` /
 `fraud`, with risk `1.15·(P(phishing) + P(fraud))`. Promo links and the
@@ -421,16 +454,16 @@ store cluster + hash only; discard raw IP
 | `entrypoints/background.ts` | Alarm-driven cache prefetch, telemetry flush, message router (`take_ad`, `queue_impression`, `ad_click`, `flush_now`, `cache_status`). |
 | `entrypoints/content.ts` | Controller: attach to composer, detect submission, mount widget, watch generation, finalize event, client pacing. |
 | `lib/adapters/base.ts` | `PlatformAdapter` interface and default anchor resolution. |
-| `lib/adapters/platforms.ts` | Five adapters; Grok has path-scoped `x.com/i/grok` matching. |
-| `lib/ad-cache.ts` | Ring buffer, expiry/cap/cooldown filtering, atomic pop, local impression history. |
-| `lib/ad-widget.ts` | Closed Shadow DOM UI, progress, earned badge, dismiss/snooze menu, CTA. |
+| `lib/adapters/platforms.ts` | Adapter implementations; only ChatGPT, Claude, and Gemini are registered. |
+| `lib/ad-cache.ts` | Self-healing ring buffer, lease deduplication, expiry/cap/cooldown filtering, atomic pop, local impression history. |
+| `lib/ad-widget.ts` | Closed Shadow DOM UI, bottom-edge view-progress bar, dismiss/snooze menu, CTA. |
 | `lib/viewport-timer.ts` | IntersectionObserver + visibility + focus integration and `performance.now()` accounting. |
 | `lib/hover-tracker.ts` | 500 ms intentional-hover gate. |
 | `lib/pohi.ts` | Trusted keystroke/paste counts only; never reads input value. |
 | `lib/telemetry-queue.ts` | Bounded local queue, batch builder, drain/restore on failure. |
 | `lib/api-client.ts` | Auth header injection, optional deflate compression, base URL resolution. |
-| `lib/storage.ts` | Typed `chrome.storage.local` helpers, settings defaults, pause sentinels, UUIDv4. |
-| `entrypoints/popup/*` | Enable toggle, display mode, placement, pause picker (5/10/15/60 min, until restart, indefinite), cache/pending/balance stats, website/privacy/terms links. |
+| `lib/storage.ts` | Typed `chrome.storage.local` helpers, settings defaults, pause sentinels, pacing snapshot, prefetch-cooldown state, UUIDv4. |
+| `entrypoints/popup/*` | Enable toggle, display mode, placement, pause picker (5/10/15/60 min, until restart, indefinite), cache/pending/balance stats, ad rate-limit exhaustion bar, website/privacy/terms links. |
 
 ### 6.3 `apps/api`
 
@@ -445,6 +478,7 @@ store cluster + hash only; discard raw IP
 | `src/fraud/cadence.ts` | CV analysis, viewport clustering, pacing tiers. |
 | `src/fraud/trust.ts` | Composite trust score, verdict bands, fraud logging. |
 | `src/moderation/laya.ts` | Policy scan, classifier client, decision bands, reputation adjustment. |
+| `src/ads-selection.ts` | Pure bid-weighted, budget- and freshness-aware campaign selection for prefetch. |
 | `src/routes/auth-ads.ts` | Register/login, prefetch + lease issuance, A/B rotation. |
 | `src/routes/telemetry.ts` | Batch ingestion, lease replay checks, PoHI/cadence, ledger credit, impression persistence. |
 | `src/routes/users-advertisers.ts` | Balance, transparency log, tasks, payouts, referrals, campaign CRUD/stats/analytics/variants, click tracking. |
@@ -600,6 +634,9 @@ erDiagram
   `401`. Logout revokes the session.
 - Bounded in-process rate limits cover registration, login, refresh, prefetch,
   telemetry, task submission, payout requests, clicks, and reviewer routes.
+  Responses include `Retry-After`, `x-ratelimit-limit`,
+  `x-ratelimit-remaining`, and `x-ratelimit-reset`; prefetch limits are
+  ad-only and never block the host AI site's own requests.
 - CORS accepts the configured web origin, loopback `localhost`/`127.0.0.1`
   origins on any port, and extension origins.
 - **Gap:** no email verification, password reset, or account lockout.
