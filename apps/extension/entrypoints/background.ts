@@ -5,7 +5,7 @@ import {
   type PrefetchResponse,
   type TelemetryBatchResponse,
 } from "@meantime/shared";
-import { cacheSize, getCachedAds, mergeCachedAds, requeueAd, takeAdRotated } from "../lib/ad-cache";
+import { cacheSize, getCachedAds, mergeCachedAds, requeueAd, takeAd } from "../lib/ad-cache";
 import { ApiError, apiFetch } from "../lib/api-client";
 import {
   ackBatch,
@@ -82,10 +82,10 @@ class MeanTimeBackground {
         if (!identity) return null;
         if (msg.platform) await storageSet(LAST_PLATFORM_KEY, msg.platform);
         const settings = await getSettings();
-        let ad = await takeAdRotated(Date.now(), msg.platform, settings.maxAdDurationSec);
+        let ad = await takeAd(Date.now(), msg.platform, settings.maxAdDurationSec);
         if (!ad) {
           await this.prefetchForPlatform(msg.platform, settings.maxAdDurationSec, identity);
-          ad = await takeAdRotated(Date.now(), msg.platform, settings.maxAdDurationSec);
+          ad = await takeAd(Date.now(), msg.platform, settings.maxAdDurationSec);
         } else {
           void this.prefetchIfNeeded(false);
         }

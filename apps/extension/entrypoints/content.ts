@@ -248,20 +248,13 @@ class MeanTimeController {
     // decision uses mounted ads only. Ordinary AI use therefore never spends
     // ad capacity or silences ads it did not actually show.
     const pacingPromise = this.recordPrompt().then(() => this.pacingAllows());
-    // Determine which ad take strategy to use based on display mode
-    const requestAd = (): Promise<PrefetchedAd | null> => {
-      if (settings.displayMode === "wait_time_only") {
-        // For strict wait-time mode, use deterministic serve-history rotation
-        return chrome.runtime
-          .sendMessage({ type: "take_ad_rotated", platform: this.adapter.platformId, maxDurationSec: settings.maxAdDurationSec })
-          .catch(() => null) as Promise<PrefetchedAd | null>;
-      } else {
-        // For persist-until-5s mode, use the original FIFO approach
-        return chrome.runtime
-          .sendMessage({ type: "take_ad", platform: this.adapter.platformId, maxDurationSec: settings.maxAdDurationSec })
-          .catch(() => null) as Promise<PrefetchedAd | null>;
-      }
-    };
+    // The service worker serves every ad through the same deterministic
+    // serve-history rotation (takeAdRotated). Display mode controls WHEN the ad
+    // closes, not which ad is served, so there is only one request shape here.
+    const requestAd = (): Promise<PrefetchedAd | null> =>
+      chrome.runtime
+        .sendMessage({ type: "take_ad", platform: this.adapter.platformId, maxDurationSec: settings.maxAdDurationSec })
+        .catch(() => null) as Promise<PrefetchedAd | null>;
     let adPromise: Promise<PrefetchedAd | null> | null = null;
     // A lease taken from the cache is single-use. If this prompt never mounts
     // an ad, put it back instead of silently burning it.
@@ -591,18 +584,13 @@ class MeanTimeController {
     this.generationObserver = new MutationObserver(check);
     this.generationObserver.observe(threadRoot, { childList: true, subtree: true, characterData: true });
 
-    // IMPORTANT: Remove polling in strict wait_time_only mode as per user requirements
-    // "response doesnot include thinking, loading process" means immediate closure on output
-    if (this.activeLease?.displayMode === "wait_time_only") {
-      // Poll only via the MutationObserver which is sufficient for strict mode
-      // Remove the polling interval to reduce resource usage and prevent layout shifts
-      this.generationInterval = null;
-      this.generationCleanupTimer = window.setTimeout(() => this.teardownObserver(), MAX_AD_LIFETIME_MS);
-    } else {
-      // Keep polling for persist mode
-      this.generationInterval = window.setInterval(check, 50);
-      this.generationCleanupTimer = window.setTimeout(() => this.teardownObserver(), MAX_AD_LIFETIME_MS);
-    }
+    // Poll every 50 ms as a rock-solid failsafe. Some frameworks stream the
+    // first token through rAF/promise queues that the MutationObserver does
+    // not observe in time, so without polling strict wait-time-only mode can
+    // hold the ad open past the first output. The interval is cheap and is
+    // torn down the moment output is detected.
+    this.generationInterval = window.setInterval(check, 50);
+    this.generationCleanupTimer = window.setTimeout(() => this.teardownObserver(), MAX_AD_LIFETIME_MS);
 
     check();
   }

@@ -59,41 +59,35 @@ const CSS = `
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
 }
 
-/* B. In the thinking bubble. A normal flow row in the conversation, mounted
-   immediately after the user's turn, exactly where the assistant's thinking
+/* B. In the thinking bubble. Mounted inside the action row (copy/share/edit)
+   immediately below the user's turn, exactly where the assistant's thinking
    indicator appears on every supported platform (including Angular Gemini).
-   It is centred on the assistant content column and sizes to its content, so
-   the paid copy gets the space that a badge/progress bar used to take.
-
-   CRITICAL FIX: The user explicitly requested the ad mount in the copy/edit icons row
-   under the user message bubble, not in a full-width block. This placement specifically
-   targets the action container where copy/edit buttons appear. */
+   It sizes to its content and flows inline with the action buttons so the
+   message text and the button row never shift when the ad appears. */
 :host([data-placement="thinking_indicator"]) {
-  display: block;
-  width: 100%;
-  position: relative;
-  margin: 2px 0 0;
+  display: inline-flex;
+  width: auto;
   max-width: 100%;
+  flex: 0 1 auto;
+  position: relative;
+  margin: 2px 4px 2px 0;
   pointer-events: auto;
   z-index: 10;
-  /* Take no vertical space to avoid layout shifts - critical for user requirement */
   min-height: 0;
   height: auto;
+  vertical-align: middle;
 }
 :host([data-placement="thinking_indicator"]) .mt-wrap {
   position: relative;
-  margin: 0 auto;
-  max-width: 768px;
-  width: calc(100% - 24px);
+  max-width: 420px;
+  width: auto;
   height: auto;
-  min-height: 44px;
-  padding: 5px 12px;
-  gap: 12px;
+  min-height: 40px;
+  padding: 4px 10px;
+  gap: 8px;
   border-radius: 8px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
-  /* Prevent layout shifts by ensuring consistent height */
   box-sizing: border-box;
-  /* Ensure it doesn't push content by taking minimal vertical space */
   transform: translateZ(0);
 }
 

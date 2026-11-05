@@ -90,6 +90,11 @@ export function filterEligible(
 /**
  * Pop the next eligible ad out of the cache and record it in the local
  * impression history. Returns null when nothing qualifies.
+ *
+ * Selection is deterministic: among eligible ads the least-recently served is
+ * chosen (rotation without replacement). This keeps the same ad from being
+ * served back-to-back across prompts while still burning a lease that was
+ * taken from the cache.
  */
 export function takeAd(
   now = Date.now(),
@@ -97,9 +102,17 @@ export function takeAd(
   maxDurationSec?: number,
 ): Promise<PrefetchedAd | null> {
   return serial(async () => {
-    const [pool, storedHistory] = await Promise.all([getCachedAds(), getHistory()]);
+    const [pool, storedHistory] = await Promise.all([getCachedAds(now), getHistory()]);
+    const serveHistory = await storageGet<Record<string, { servedAt: number }>>(STORAGE_KEYS.AD_SERVE_HISTORY, {});
     const history = pruneHistory(storedHistory, now);
     const eligible = filterEligible(pool, history, now, platform, maxDurationSec);
+    if (eligible.length === 0) return null;
+    // Rotate without replacement: pick the least-recently served eligible ad.
+    eligible.sort((a, b) => {
+      const aTime = serveHistory[a.leaseId]?.servedAt ?? 0;
+      const bTime = serveHistory[b.leaseId]?.servedAt ?? 0;
+      return aTime - bTime;
+    });
     const chosen = eligible[0];
     if (!chosen) return null;
 
@@ -113,47 +126,6 @@ export function takeAd(
     history[chosen.campaignId] = rec;
     await storageSet(STORAGE_KEYS.IMPRESSION_HISTORY, history);
 
-    return chosen;
-  });
-}
-
-/**
- * Pop the next eligible ad using deterministic serve-history rotation.
- * This ensures each ad is shown at most once per rotation window.
- */
-export function takeAdRotated(
-  now = Date.now(),
-  platform?: string,
-  maxDurationSec?: number,
-): Promise<PrefetchedAd | null> {
-  return serial(async () => {
-    const [pool, storedHistory] = await Promise.all([getCachedAds(now), getHistory()]);
-    const serveHistory = await storageGet<Record<string, { servedAt: number }>>(STORAGE_KEYS.AD_SERVE_HISTORY, {});
-    const eligible = filterEligible(pool, storedHistory, now, platform, maxDurationSec);
-    if (eligible.length === 0) return null;
-    // Rotate without replacement: pick the least-recently served eligible ad
-    eligible.sort((a, b) => {
-      const aServe = serveHistory[a.leaseId];
-      const bServe = serveHistory[b.leaseId];
-      const aTime = aServe?.servedAt ?? 0;
-      const bTime = bServe?.servedAt ?? 0;
-      return aTime - bTime;
-    });
-    const chosen = eligible[0];
-    if (!chosen) return null;
-
-    // WITHOUT REPLACEMENT: Remove from cache
-    const remaining = pool.filter((a) => a.leaseId !== chosen.leaseId);
-    await setCachedAds(remaining);
-
-    // Record this serve for rotation and frequency capping
-    const history = pruneHistory(storedHistory, now);
-    const rec = history[chosen.campaignId] ?? { days: [], lastShownAt: 0 };
-    rec.days.push(dayKey(now));
-    rec.lastShownAt = now;
-    history[chosen.campaignId] = rec;
-    await storageSet(STORAGE_KEYS.IMPRESSION_HISTORY, history);
-
     await storageSet(STORAGE_KEYS.AD_SERVE_HISTORY, {
       ...serveHistory,
       [chosen.leaseId]: { servedAt: now },
@@ -162,6 +134,9 @@ export function takeAdRotated(
     return chosen;
   });
 }
+
+/** Alias kept for callers that name the rotation explicitly. */
+export const takeAdRotated = takeAd;
 
 /**
  * Return the number of live ads in the cache.

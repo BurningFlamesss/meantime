@@ -1,15 +1,6 @@
 import { PLATFORM_CONFIGS } from "@meantime/shared";
 import { BaseAdapter, type MountTarget } from "./base";
 
-function anchorFor(el: HTMLElement): HTMLElement {
-  return (
-    el.closest<HTMLElement>("[data-chatgpt-search-unit-key]")?.parentElement ??
-    el.closest<HTMLElement>("[data-turn-key]") ??
-    el.closest<HTMLElement>(".group\\/user-message")?.parentElement ??
-    el
-  );
-}
-
 export class OpenAiAdapter extends BaseAdapter {
   readonly platformId = "openai";
   readonly config = PLATFORM_CONFIGS.openai;
@@ -103,13 +94,10 @@ export class OpenAiAdapter extends BaseAdapter {
   }
 
   override getThinkingSlot(): MountTarget | null {
-    // Reference-to-take technique: anchor after the user prompt turn container.
-    // This inserts the ad in a full-width block row directly above the thinking bubble
-    // and AI response, active throughout the thinking time and without obscuring content.
+    // Mount inside the action row (copy/share/edit) so the ad sits inline
+    // with those buttons and never pushes the message below.
     const user = this.findLatestUserMessage();
-    if (user) {
-      return { element: anchorFor(user), position: "after" };
-    }
+    if (user) return this.getUserMessageActionSlot(user);
     return null;
   }
 
@@ -173,7 +161,18 @@ export class GeminiAdapter extends BaseAdapter {
       latestMessageNode.closest<HTMLElement>(
         "user-query, .user-query, .user-query-container, div[class*='user-query'], div[class*='query-container']",
       ) ?? latestMessageNode;
-    return { element: userQuery, position: "after" };
+    // Gemini puts copy/share/edit buttons in a row inside the user query. Mount
+    // inside that row so the ad sits inline with the buttons and never pushes
+    // the message below.
+    const actionRow = userQuery.querySelector<HTMLElement>(
+      "button[aria-label*='Copy' i], button[aria-label*='Share' i], button[aria-label*='Edit' i], " +
+      "[class*='action'], [class*='actions'], [role='toolbar'], [data-testid*='action'], footer",
+    );
+    const target = actionRow ?? userQuery;
+    if (getComputedStyle(target).position === "static") {
+      target.style.position = "relative";
+    }
+    return { element: target, position: "append" };
   }
 
   override getThinkingSlot(): MountTarget | null {
@@ -248,26 +247,9 @@ export class ClaudeAdapter extends BaseAdapter {
   override getThinkingSlot(): MountTarget | null {
     const user = this.findLatestUserMessage();
     if (!user) return null;
-    // CRITICAL FIX: Anchors to the exact copy/edit icons row as requested by user
-    // Find the action container that holds the copy/edit buttons
-    const actionRow = user.querySelector<HTMLElement>(
-      "[data-cds='ActionRow'], [class*='action-container'], [class*='actions-container'], " +
-      "[class*='turn-action-controls'], [class*='message-actions'], " +
-      "button[aria-label*='Copy'], button[aria-label*='Edit'], " +
-      "[role='toolbar'], [data-testid*='actions'], [data-toolbar]"
-    );
-    if (actionRow && actionRow.getBoundingClientRect().width > 0) {
-      actionRow.style.position = "relative";
-      return { element: actionRow, position: "after" };
-    }
-    // Fallback: use the bubble parent (narrow column above send row)
-    const turn =
-      user.closest<HTMLElement>("[data-cds='UserMessage']")?.parentElement ??
-      user.closest<HTMLElement>("[data-testid='user-message']")?.parentElement ??
-      user.parentElement ??
-      user;
-    turn.style.position = "relative";
-    return { element: turn, position: "after" };
+    // Mount inside the action row (copy/share/edit) so the ad sits inline
+    // with those buttons and never pushes the message below.
+    return this.getUserMessageActionSlot(user);
   }
 
   /**
@@ -310,21 +292,9 @@ export class DeepseekAdapter extends BaseAdapter {
   override getThinkingSlot(): MountTarget | null {
     const user = this.findLatestUserMessage();
     if (!user) return null;
-    // Find the action container that holds copy/edit buttons
-    const actionRow = user.querySelector<HTMLElement>(
-      "[class*='action'], [class*='actions'], footer, button[aria-label*='Copy'], button[aria-label*='Edit']" +
-      ", [class*='toolbar'], [data-toolbar]"
-    );
-    if (actionRow) {
-      actionRow.style.position = "relative";
-      return { element: actionRow, position: "after" };
-    }
-    const row =
-      user.closest<HTMLElement>(
-        "[data-testid*='message-row'], [class*='message-row'], [class*='chat-message'], article, li",
-      ) ?? user;
-    row.style.position = "relative";
-    return { element: row, position: "after" };
+    // Mount inside the action row (copy/share/edit) so the ad sits inline
+    // with those buttons and never pushes the message below.
+    return this.getUserMessageActionSlot(user);
   }
 
   override getAboveComposerSlot(): MountTarget | null {
@@ -370,30 +340,13 @@ export class GrokAdapter extends BaseAdapter {
     return { element: target, position: "append" };
   }
 
-  /** Grok renders each bubble inside a message row; anchor after the row, specifically targeting the copy/edit actions */
+  /** Grok renders each bubble inside a message row; anchor in the action row */
   override getThinkingSlot(): MountTarget | null {
     const user = this.findLatestUserMessage();
     if (!user) return null;
-
-    // FIRST ATTEMPT: Look specifically for copy/edit action buttons in Grok's message row
-    const actionRow = user.querySelector<HTMLElement>(
-      "button[aria-label*='Copy'], button[aria-label*='Edit']" +
-      ", [class*='action'], [class*='actions'], [class*='toolbar']"
-    );
-    if (actionRow) {
-      actionRow.style.position = "relative";
-      return { element: actionRow, position: "after" };
-    }
-
-    // FALLBACK: Use the message row container
-    const row =
-      user.closest<HTMLElement>(
-        "[data-testid='message-row'], [class*='message-row'], [class*='conversation-turn'], [class*='chat-message'], article, li",
-      ) ??
-      user.parentElement ??
-      user;
-    row.style.position = "relative";
-    return { element: row, position: "after" };
+    // Mount inside the action row (copy/share/edit) so the ad sits inline
+    // with those buttons and never pushes the message below.
+    return this.getUserMessageActionSlot(user);
   }
 
   override getAboveComposerSlot(): MountTarget | null {

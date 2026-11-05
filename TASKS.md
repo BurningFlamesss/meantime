@@ -1,6 +1,6 @@
 # MeanTime — Tasks and Roadmap
 
-**Last updated:** 2026-11-04 (multilingual + labelled-benchmark pass; pause modes + legal pages)  
+**Last updated:** 2026-11-05 (ad placement inline with action row; strict wait-time-only closes on first token)  
 **Status legend:** `[x]` done · `[~]` partial · `[ ]` not started · `[!]` blocked  
 **Priority:** P0 = required for a testable end-to-end demo · P1 = required for
 private beta · P2 = post-launch / polish
