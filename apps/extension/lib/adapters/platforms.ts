@@ -248,11 +248,25 @@ export class ClaudeAdapter extends BaseAdapter {
   override getThinkingSlot(): MountTarget | null {
     const user = this.findLatestUserMessage();
     if (!user) return null;
+    // CRITICAL FIX: Anchors to the exact copy/edit icons row as requested by user
+    // Find the action container that holds the copy/edit buttons
+    const actionRow = user.querySelector<HTMLElement>(
+      "[data-cds='ActionRow'], [class*='action-container'], [class*='actions-container'], " +
+      "[class*='turn-action-controls'], [class*='message-actions'], " +
+      "button[aria-label*='Copy'], button[aria-label*='Edit'], " +
+      "[role='toolbar'], [data-testid*='actions'], [data-toolbar]"
+    );
+    if (actionRow && actionRow.getBoundingClientRect().width > 0) {
+      actionRow.style.position = "relative";
+      return { element: actionRow, position: "after" };
+    }
+    // Fallback: use the bubble parent (narrow column above send row)
     const turn =
       user.closest<HTMLElement>("[data-cds='UserMessage']")?.parentElement ??
       user.closest<HTMLElement>("[data-testid='user-message']")?.parentElement ??
       user.parentElement ??
       user;
+    turn.style.position = "relative";
     return { element: turn, position: "after" };
   }
 
@@ -281,17 +295,35 @@ export class DeepseekAdapter extends BaseAdapter {
   readonly platformId = "deepseek";
   readonly config = PLATFORM_CONFIGS.deepseek;
 
-  /**
-   * DeepSeek nests the user bubble inside a message row. Mount after the row,
-   * not inside the bubble, so the ad spans the conversation column.
-   */
+  override getUserMessageActionSlot(latestMessageNode: HTMLElement): MountTarget {
+    const bubble = latestMessageNode.closest<HTMLElement>("[data-user-message-bubble], [class*='user-bubble'], [class*='message-bubble']");
+    const actionRow = bubble?.querySelector<HTMLElement>(
+      "[class*='action'], [class*='actions'], footer, button[aria-label*='Copy'], button[aria-label*='Edit']"
+    ) ?? latestMessageNode.querySelector<HTMLElement>(
+      "[class*='action'], [class*='actions'], footer, button[aria-label*='Copy'], button[aria-label*='Edit']"
+    );
+    const target = actionRow ?? latestMessageNode;
+    target.style.position = "relative";
+    return { element: target, position: "append" };
+  }
+
   override getThinkingSlot(): MountTarget | null {
     const user = this.findLatestUserMessage();
     if (!user) return null;
+    // Find the action container that holds copy/edit buttons
+    const actionRow = user.querySelector<HTMLElement>(
+      "[class*='action'], [class*='actions'], footer, button[aria-label*='Copy'], button[aria-label*='Edit']" +
+      ", [class*='toolbar'], [data-toolbar]"
+    );
+    if (actionRow) {
+      actionRow.style.position = "relative";
+      return { element: actionRow, position: "after" };
+    }
     const row =
       user.closest<HTMLElement>(
         "[data-testid*='message-row'], [class*='message-row'], [class*='chat-message'], article, li",
       ) ?? user;
+    row.style.position = "relative";
     return { element: row, position: "after" };
   }
 
@@ -324,16 +356,43 @@ export class GrokAdapter extends BaseAdapter {
     return false;
   }
 
-  /** Grok renders each bubble inside a message row; anchor after the row. */
+  override getUserMessageActionSlot(latestMessageNode: HTMLElement): MountTarget {
+    const bubble = latestMessageNode.closest<HTMLElement>(
+      "[class*='message-row'], [class*='chat-message'], article, li"
+    );
+    const actionRow = bubble?.querySelector<HTMLElement>(
+      "[class*='action'], [class*='actions'], button[aria-label*='Copy'], button[aria-label*='Edit']"
+    ) ?? latestMessageNode.querySelector<HTMLElement>(
+      "[class*='action'], [class*='actions'], button[aria-label*='Copy'], button[aria-label*='Edit']"
+    );
+    const target = actionRow ?? latestMessageNode;
+    target.style.position = "relative";
+    return { element: target, position: "append" };
+  }
+
+  /** Grok renders each bubble inside a message row; anchor after the row, specifically targeting the copy/edit actions */
   override getThinkingSlot(): MountTarget | null {
     const user = this.findLatestUserMessage();
     if (!user) return null;
+
+    // FIRST ATTEMPT: Look specifically for copy/edit action buttons in Grok's message row
+    const actionRow = user.querySelector<HTMLElement>(
+      "button[aria-label*='Copy'], button[aria-label*='Edit']" +
+      ", [class*='action'], [class*='actions'], [class*='toolbar']"
+    );
+    if (actionRow) {
+      actionRow.style.position = "relative";
+      return { element: actionRow, position: "after" };
+    }
+
+    // FALLBACK: Use the message row container
     const row =
       user.closest<HTMLElement>(
         "[data-testid='message-row'], [class*='message-row'], [class*='conversation-turn'], [class*='chat-message'], article, li",
       ) ??
       user.parentElement ??
       user;
+    row.style.position = "relative";
     return { element: row, position: "after" };
   }
 
@@ -347,7 +406,9 @@ export class GrokAdapter extends BaseAdapter {
       input.parentElement?.parentElement ??
       input.parentElement;
     if (!area) return null;
-    if (getComputedStyle(area).position === "static") area.style.position = "relative";
+    if (getComputedStyle(area).position === "static") {
+      area.style.position = "relative";
+    }
     return { element: area, position: "append" };
   }
 }

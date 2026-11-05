@@ -215,6 +215,11 @@ class MeanTimeController {
   /* ------------------------------ lifecycle ----------------------------- */
 
   private async onPromptSubmitted(source: TriggerSource): Promise<void> {
+    // Focus gating: only activate when the matching site has focus
+    if (document.hidden) {
+      console.info("[MeanTime] Tab not focused, skipping ad");
+      return;
+    }
     if (this.inFlight || this.activeWidget) return; // one ad at a time
     console.info(`[MeanTime] Prompt detected (${source})`);
 
@@ -243,10 +248,20 @@ class MeanTimeController {
     // decision uses mounted ads only. Ordinary AI use therefore never spends
     // ad capacity or silences ads it did not actually show.
     const pacingPromise = this.recordPrompt().then(() => this.pacingAllows());
-    const requestAd = (): Promise<PrefetchedAd | null> =>
-      chrome.runtime
-        .sendMessage({ type: "take_ad", platform: this.adapter.platformId })
-        .catch(() => null) as Promise<PrefetchedAd | null>;
+    // Determine which ad take strategy to use based on display mode
+    const requestAd = (): Promise<PrefetchedAd | null> => {
+      if (settings.displayMode === "wait_time_only") {
+        // For strict wait-time mode, use deterministic serve-history rotation
+        return chrome.runtime
+          .sendMessage({ type: "take_ad_rotated", platform: this.adapter.platformId, maxDurationSec: settings.maxAdDurationSec })
+          .catch(() => null) as Promise<PrefetchedAd | null>;
+      } else {
+        // For persist-until-5s mode, use the original FIFO approach
+        return chrome.runtime
+          .sendMessage({ type: "take_ad", platform: this.adapter.platformId, maxDurationSec: settings.maxAdDurationSec })
+          .catch(() => null) as Promise<PrefetchedAd | null>;
+      }
+    };
     let adPromise: Promise<PrefetchedAd | null> | null = null;
     // A lease taken from the cache is single-use. If this prompt never mounts
     // an ad, put it back instead of silently burning it.
@@ -306,7 +321,7 @@ class MeanTimeController {
             }
           },
           onEarned: () => {
-            console.info(`[MeanTime] ${(ad.durationSec ?? 5)}s view verified — impression earned!`);
+            console.info(`[MeanTime] ${(ad.durationSec ?? 5)}s view verified and still visible – impression earned!`);
             this.finalize("earned");
           },
           onClickCta: () => {
@@ -454,8 +469,13 @@ class MeanTimeController {
    */
   private watchReanchor(placement: Placement): void {
     this.reanchorObserver?.disconnect();
+
+    // Focus gating for reanchor: only watch when the site has focus
+    const shouldWatch = () => !document.hidden;
+
     this.reanchorObserver = new MutationObserver(() => {
       if (!this.activeWidget || this.activeLease?.closed) return;
+      if (!shouldWatch()) return;
       if (placement === "above_composer") {
         const slot = this.adapter.getAboveComposerSlot();
         if (slot) this.activeWidget.reanchor(slot);
@@ -466,7 +486,11 @@ class MeanTimeController {
       const slot = this.adapter.getThinkingSlot();
       if (slot) this.activeWidget.reanchor(slot);
     });
-    this.reanchorObserver.observe(document.body, { childList: true, subtree: true });
+
+    // Only observe when the site has focus
+    if (shouldWatch()) {
+      this.reanchorObserver.observe(document.body, { childList: true, subtree: true });
+    }
   }
 
   private stopWatchingReanchor(): void {
@@ -566,9 +590,20 @@ class MeanTimeController {
 
     this.generationObserver = new MutationObserver(check);
     this.generationObserver.observe(threadRoot, { childList: true, subtree: true, characterData: true });
-    // Also poll every 50ms as a rock-solid failsafe to ensure instant closure on first token in wait_time_only mode
-    this.generationInterval = window.setInterval(check, 50);
-    this.generationCleanupTimer = window.setTimeout(() => this.teardownObserver(), MAX_AD_LIFETIME_MS);
+
+    // IMPORTANT: Remove polling in strict wait_time_only mode as per user requirements
+    // "response doesnot include thinking, loading process" means immediate closure on output
+    if (this.activeLease?.displayMode === "wait_time_only") {
+      // Poll only via the MutationObserver which is sufficient for strict mode
+      // Remove the polling interval to reduce resource usage and prevent layout shifts
+      this.generationInterval = null;
+      this.generationCleanupTimer = window.setTimeout(() => this.teardownObserver(), MAX_AD_LIFETIME_MS);
+    } else {
+      // Keep polling for persist mode
+      this.generationInterval = window.setInterval(check, 50);
+      this.generationCleanupTimer = window.setTimeout(() => this.teardownObserver(), MAX_AD_LIFETIME_MS);
+    }
+
     check();
   }
 

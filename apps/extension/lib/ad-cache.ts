@@ -1,11 +1,13 @@
+// Clean implementation of ad cache with rotate-without-replacement strategy
+
 import type { PrefetchedAd } from "@meantime/shared";
 import { EXTENSION_CACHE } from "@meantime/shared";
 import {
-  STORAGE_KEYS,
   storageGet,
   storageSet,
   type ImpressionHistory,
-} from "./storage";
+} from "./storage"
+import { STORAGE_KEYS } from "./storage";
 
 function dayKey(now: number): string {
   return new Date(now).toISOString().slice(0, 10);
@@ -50,38 +52,6 @@ export function normalizeCachedAds(pool: PrefetchedAd[], now = Date.now()): Pref
   return live.slice(-EXTENSION_CACHE.MAX_CACHED_ADS);
 }
 
-export async function getCachedAds(now = Date.now()): Promise<PrefetchedAd[]> {
-  const raw = await storageGet<PrefetchedAd[]>(STORAGE_KEYS.AD_CACHE, []);
-  return normalizeCachedAds(Array.isArray(raw) ? raw : [], now);
-}
-
-export async function setCachedAds(ads: PrefetchedAd[]): Promise<void> {
-  await storageSet(STORAGE_KEYS.AD_CACHE, normalizeCachedAds(ads));
-}
-
-/**
- * Merge a prefetch response into the cache inside the same serial chain as
- * takeAd/requeueAd. Re-reading the pool here is what prevents a request that
- * started before a tab consumed a lease from putting that lease back.
- */
-export function mergeCachedAds(fresh: PrefetchedAd[]): Promise<void> {
-  return serial(async () => {
-    const pool = await getCachedAds();
-    const known = new Set(pool.map((a) => a.leaseId));
-    const additions = normalizeCachedAds(fresh).filter((a) => !known.has(a.leaseId));
-    if (additions.length === 0) return;
-    await storageSet(STORAGE_KEYS.AD_CACHE, normalizeCachedAds([...pool, ...additions]));
-  });
-}
-
-export async function cacheSize(): Promise<number> {
-  return (await getCachedAds()).length;
-}
-
-export async function getHistory(): Promise<ImpressionHistory> {
-  return storageGet<ImpressionHistory>(STORAGE_KEYS.IMPRESSION_HISTORY, {});
-}
-
 function supportsPlatform(ad: PrefetchedAd, platform?: string): boolean {
   if (!platform) return true;
   const targets = ad.targetPlatforms ?? [];
@@ -117,15 +87,6 @@ export function filterEligible(
   });
 }
 
-function pruneHistory(history: ImpressionHistory, now: number): ImpressionHistory {
-  const cutoff = dayKey(now - 7 * 86_400_000);
-  for (const [campaignId, rec] of Object.entries(history)) {
-    rec.days = rec.days.filter((d) => d >= cutoff).slice(-7);
-    if (rec.days.length === 0 && rec.lastShownAt < now - 7 * 86_400_000) delete history[campaignId];
-  }
-  return history;
-}
-
 /**
  * Pop the next eligible ad out of the cache and record it in the local
  * impression history. Returns null when nothing qualifies.
@@ -156,6 +117,74 @@ export function takeAd(
   });
 }
 
+/**
+ * Pop the next eligible ad using deterministic serve-history rotation.
+ * This ensures each ad is shown at most once per rotation window.
+ */
+export function takeAdRotated(
+  now = Date.now(),
+  platform?: string,
+  maxDurationSec?: number,
+): Promise<PrefetchedAd | null> {
+  return serial(async () => {
+    const [pool, storedHistory] = await Promise.all([getCachedAds(now), getHistory()]);
+    const serveHistory = await storageGet<Record<string, { servedAt: number }>>(STORAGE_KEYS.AD_SERVE_HISTORY, {});
+    const eligible = filterEligible(pool, storedHistory, now, platform, maxDurationSec);
+    if (eligible.length === 0) return null;
+    // Rotate without replacement: pick the least-recently served eligible ad
+    eligible.sort((a, b) => {
+      const aServe = serveHistory[a.leaseId];
+      const bServe = serveHistory[b.leaseId];
+      const aTime = aServe?.servedAt ?? 0;
+      const bTime = bServe?.servedAt ?? 0;
+      return aTime - bTime;
+    });
+    const chosen = eligible[0];
+    if (!chosen) return null;
+
+    // WITHOUT REPLACEMENT: Remove from cache
+    const remaining = pool.filter((a) => a.leaseId !== chosen.leaseId);
+    await setCachedAds(remaining);
+
+    // Record this serve for rotation and frequency capping
+    const history = pruneHistory(storedHistory, now);
+    const rec = history[chosen.campaignId] ?? { days: [], lastShownAt: 0 };
+    rec.days.push(dayKey(now));
+    rec.lastShownAt = now;
+    history[chosen.campaignId] = rec;
+    await storageSet(STORAGE_KEYS.IMPRESSION_HISTORY, history);
+
+    await storageSet(STORAGE_KEYS.AD_SERVE_HISTORY, {
+      ...serveHistory,
+      [chosen.leaseId]: { servedAt: now },
+    });
+    await pruneAdServeHistory(now);
+    return chosen;
+  });
+}
+
+/**
+ * Return the number of live ads in the cache.
+ */
+export async function cacheSize(now = Date.now()): Promise<number> {
+  const ads = await getCachedAds(now);
+  return ads.length;
+}
+
+/**
+ * Add new ads to the cache, deduplicating by leaseId and preserving local
+ * serve history.
+ */
+export function mergeCachedAds(incoming: PrefetchedAd[]): Promise<void> {
+  return serial(async () => {
+    const pool = await getCachedAds();
+    const existingIds = new Set(pool.map((a) => a.leaseId));
+    const unique = incoming.filter((a) => !existingIds.has(a.leaseId));
+    if (unique.length === 0) return;
+    await setCachedAds([...pool, ...unique]);
+  });
+}
+
 /** Return an ad whose widget failed to mount so its lease is not wasted. */
 export function requeueAd(ad: PrefetchedAd): Promise<void> {
   return serial(async () => {
@@ -166,4 +195,57 @@ export function requeueAd(ad: PrefetchedAd): Promise<void> {
     // so a requeued lease would otherwise be dropped when the cache is full.
     await setCachedAds([...pool, ad]);
   });
+}
+
+/**
+ * Record that we served an ad, for rotation history.
+ * Uses the same serial chain to avoid concurrent writes.
+ */
+export function recordAdServe(
+  campaignId: string,
+  leaseId: string,
+  now = Date.now(),
+): Promise<void> {
+  return serial(async () => {
+    const key = STORAGE_KEYS.AD_SERVE_HISTORY;
+    const stored = await storageGet<Record<string, { servedAt: number }>>(key, {});
+    stored[leaseId] = { servedAt: now };
+    await storageSet(key, stored);
+  });
+}
+
+/** Remove entries older than the TTL (30 minutes) for cleanup. */
+export function pruneAdServeHistory(now = Date.now()): Promise<void> {
+  const cutoff = now - 30 * 60 * 1000; // 30 min
+  return serial(async () => {
+    const key = STORAGE_KEYS.AD_SERVE_HISTORY;
+    const stored = await storageGet<Record<string, { servedAt: number }>>(key, {});
+    const filtered: Record<string, { servedAt: number }> = {};
+    for (const [leaseId, val] of Object.entries(stored)) {
+      if (val.servedAt >= cutoff) filtered[leaseId] = val;
+    }
+    await storageSet(key, filtered);
+  });
+}
+
+export async function getCachedAds(now = Date.now()): Promise<PrefetchedAd[]> {
+  const raw = await storageGet<PrefetchedAd[]>(STORAGE_KEYS.AD_CACHE, []);
+  return normalizeCachedAds(Array.isArray(raw) ? raw : [], now);
+}
+
+export async function setCachedAds(ads: PrefetchedAd[]): Promise<void> {
+  await storageSet(STORAGE_KEYS.AD_CACHE, normalizeCachedAds(ads));
+}
+
+export async function getHistory(): Promise<ImpressionHistory> {
+  return storageGet<ImpressionHistory>(STORAGE_KEYS.IMPRESSION_HISTORY, {});
+}
+
+function pruneHistory(history: ImpressionHistory, now: number): ImpressionHistory {
+  const cutoff = dayKey(now - 7 * 86_400_000);
+  for (const [campaignId, rec] of Object.entries(history)) {
+    rec.days = rec.days.filter((d) => d >= cutoff).slice(-7);
+    if (rec.days.length === 0 && rec.lastShownAt < now - 7 * 86_400_000) delete history[campaignId];
+  }
+  return history;
 }

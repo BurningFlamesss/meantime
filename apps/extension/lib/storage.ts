@@ -16,6 +16,8 @@ export const STORAGE_KEYS = {
   PACING_STATE: "pacing_state",
   /** Server-side prefetch (429) cooldown so every prompt does not retry. */
   AD_REQUEST_LIMIT: "ad_request_limit",
+  /** Serve-history rotation: which ads we've served and when, for deterministic rotation */
+  AD_SERVE_HISTORY: "ad_serve_history",
 } as const;
 
 export interface ExtensionSettings {

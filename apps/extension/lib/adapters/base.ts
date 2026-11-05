@@ -108,20 +108,24 @@ export abstract class BaseAdapter implements PlatformAdapter {
   }
 
   getAboveComposerSlot(): MountTarget | HTMLElement | null {
-    const portal = this.qs<HTMLElement>("[data-above-composer-portal='true']");
-    if (portal) {
-      portal.style.position = "relative";
-      return { element: portal, position: "append" };
+    // Create the dedicated overlay wrapper that AdWidget.destroy() already expects
+    const existingPortal = this.qs<HTMLElement>("[data-above-composer-portal='true']");
+    if (existingPortal) {
+      existingPortal.style.position = "relative";
+      return { element: existingPortal, position: "append" };
     }
+
+    // For platforms without an existing portal, create one positioned relative
     const input = this.qs<HTMLElement>(this.config.promptInputSelector);
     if (!input) return null;
-    const form =
-      input.closest("form") ??
-      input.closest("[data-chatgpt-composer]") ??
-      input.parentElement?.parentElement ??
-      input.parentElement;
-    if (!form) return null;
-    form.style.position = "relative";
-    return { element: form, position: "append" };
+    const portal = document.createElement("div");
+    portal.setAttribute("data-above-composer-portal", "true");
+    portal.style.position = "relative";
+    portal.style.zIndex = "40";
+    portal.style.pointerEvents = "none";
+    // Insert the portal where the input's parent is positioned
+    const parent = input.parentElement || input;
+    parent.insertBefore(portal, input);
+    return { element: portal, position: "append" };
   }
 }

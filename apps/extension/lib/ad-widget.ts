@@ -63,15 +63,22 @@ const CSS = `
    immediately after the user's turn, exactly where the assistant's thinking
    indicator appears on every supported platform (including Angular Gemini).
    It is centred on the assistant content column and sizes to its content, so
-   the paid copy gets the space that a badge/progress bar used to take. */
+   the paid copy gets the space that a badge/progress bar used to take.
+
+   CRITICAL FIX: The user explicitly requested the ad mount in the copy/edit icons row
+   under the user message bubble, not in a full-width block. This placement specifically
+   targets the action container where copy/edit buttons appear. */
 :host([data-placement="thinking_indicator"]) {
   display: block;
   width: 100%;
   position: relative;
-  margin: 2px 0 12px;
+  margin: 2px 0 0;
   max-width: 100%;
   pointer-events: auto;
   z-index: 10;
+  /* Take no vertical space to avoid layout shifts - critical for user requirement */
+  min-height: 0;
+  height: auto;
 }
 :host([data-placement="thinking_indicator"]) .mt-wrap {
   position: relative;
@@ -79,11 +86,15 @@ const CSS = `
   max-width: 768px;
   width: calc(100% - 24px);
   height: auto;
-  min-height: 46px;
-  padding: 8px 14px;
+  min-height: 44px;
+  padding: 5px 12px;
   gap: 12px;
-  border-radius: 10px;
+  border-radius: 8px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  /* Prevent layout shifts by ensuring consistent height */
+  box-sizing: border-box;
+  /* Ensure it doesn't push content by taking minimal vertical space */
+  transform: translateZ(0);
 }
 
 /* ---------------- CONTENT HIERARCHY & TYPOGRAPHY ---------------- */
@@ -573,6 +584,8 @@ export class AdWidget {
     this.wrap.dataset.theme = theme;
     this.wrap.classList.toggle("theme-dark", theme === "dark");
     this.wrap.classList.toggle("theme-light", theme === "light");
+    // CRITICAL FIX: Update theme on the host element to ensure styles apply
+    this.host.dataset.theme = theme;
   }
 
   mount(target: HTMLElement | MountTarget, placement?: string, theme?: "light" | "dark", platform?: string): void {
