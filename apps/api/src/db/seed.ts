@@ -19,7 +19,7 @@ async function main(): Promise<void> {
     .returning();
   if (!adv) {
     console.log("Seed already applied.");
-    return;
+    process.exit(0);
   }
 
   await db.insert(campaigns).values([
@@ -54,6 +54,7 @@ async function main(): Promise<void> {
   ]);
 
   console.log("Seeded demo advertiser and 2 campaigns.");
+  process.exit(0);
 }
 
 void main();

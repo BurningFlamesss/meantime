@@ -84,6 +84,7 @@ export const users = pgTable(
     passwordHash: text("password_hash").notNull(),
     displayName: text("display_name"),
     country: text("country"),
+    emailVerified: boolean("email_verified").notNull().default(false),
     /** Salted SHA-256 of the signup IP for equality checks; raw IPs are never stored. */
     signupIpHash: text("signup_ip_hash"),
     signupAsn: integer("signup_asn"),
@@ -128,6 +129,24 @@ export const authSessions = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("auth_sessions_user_idx").on(t.userId)],
+);
+
+/** Pending email verification tokens for newly registered users. */
+export const emailVerifications = pgTable(
+  "email_verifications",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("email_verifications_token_hash_uidx").on(t.tokenHash),
+    index("email_verifications_user_idx").on(t.userId),
+  ],
 );
 
 /**

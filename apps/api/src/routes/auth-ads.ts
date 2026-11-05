@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, desc, eq, gt, gte, inArray, ne, or, sql } from "drizzle-orm";
 import argon2 from "argon2";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   LEASE,
   EXTENSION_CACHE,
@@ -9,6 +9,8 @@ import {
   refreshTokenSchema,
   registerUserSchema,
   loginSchema,
+  verifyEmailSchema,
+  resendVerificationSchema,
   signLeaseToken,
   type LeaseTokenPayload,
   type PrefetchedAd,
@@ -23,6 +25,7 @@ import {
   campaigns,
   campaignVariants,
   devices,
+  emailVerifications,
   impressions,
   referrals,
   userNetworkEvents,
@@ -42,6 +45,7 @@ import { clusterForIp, resolveGeo } from "../geo.js";
 import { checkReferralAllowed } from "../referrals.js";
 import { logFraud } from "../fraud/trust.js";
 import { rateLimit } from "../rate-limit.js";
+import { sendVerificationEmail } from "../email.js";
 
 const ACCESS_TTL_SECONDS = 60 * 60 * 24 * 30;
 const REFRESH_TTL_MS = 60 * 24 * 60 * 60 * 1000;
@@ -176,12 +180,30 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext) {
     );
     const session = await issueSession(ctx, user.id, deviceId);
     await recordNetworkEvent(ctx, user.id, ip);
+
+    // Issue email verification token and attempt sending verification email
+    const verifyToken = randomBytes(32).toString("hex");
+    const verifyTokenHash = createHash("sha256").update(verifyToken).digest("hex");
+    const verifyExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await ctx.db.insert(emailVerifications).values({
+      userId: user.id,
+      tokenHash: verifyTokenHash,
+      expiresAt: verifyExpiresAt,
+    });
+    void sendVerificationEmail({
+      to: user.email,
+      token: verifyToken,
+      webOrigin: ctx.env.WEB_ORIGIN,
+      env: ctx.env,
+    });
+
     return {
       userId: user.id,
       deviceId,
       accessToken,
       refreshToken: session.refreshToken,
       refreshExpiresAt: session.expiresAt.getTime(),
+      emailVerified: false,
     };
   });
 
@@ -218,7 +240,95 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext) {
       accessToken,
       refreshToken: session.refreshToken,
       refreshExpiresAt: session.expiresAt.getTime(),
+      emailVerified: user.emailVerified,
     };
+  });
+
+  app.post("/auth/verify-email", async (req, reply) => {
+    if (!rateLimit(req, reply, "auth_verify_email", 15, 600_000)) return;
+    const body = verifyEmailSchema.parse(req.body);
+    const hash = createHash("sha256").update(body.token).digest("hex");
+
+    const [record] = await ctx.db
+      .select()
+      .from(emailVerifications)
+      .where(and(eq(emailVerifications.tokenHash, hash), gt(emailVerifications.expiresAt, new Date())))
+      .limit(1);
+
+    if (!record) {
+      return reply.code(400).send({ error: "invalid_or_expired_token" });
+    }
+
+    await ctx.db.transaction(async (tx) => {
+      await tx.update(users).set({ emailVerified: true }).where(eq(users.id, record.userId));
+      await tx.delete(emailVerifications).where(eq(emailVerifications.userId, record.userId));
+    });
+
+    return { ok: true, message: "Email verified successfully." };
+  });
+
+  app.post("/auth/resend-verification", async (req, reply) => {
+    if (!rateLimit(req, reply, "auth_resend_verification", 5, 600_000)) return;
+    const body = resendVerificationSchema.parse(req.body ?? {});
+    let targetUserId: string | null = null;
+    let targetEmail: string | null = null;
+
+    const authHeader = req.headers.authorization;
+    if (authHeader?.startsWith("Bearer ")) {
+      const claims = requireUser(req, reply, ctx.env.JWT_SECRET);
+      if (claims?.userId) {
+        targetUserId = claims.userId;
+      }
+    }
+
+    if (targetUserId) {
+      const [u] = await ctx.db.select().from(users).where(eq(users.id, targetUserId)).limit(1);
+      if (u) {
+        targetEmail = u.email;
+        if (u.emailVerified) {
+          return reply.code(400).send({ error: "already_verified" });
+        }
+      }
+    } else if (body.email) {
+      const [u] = await ctx.db.select().from(users).where(eq(users.email, body.email)).limit(1);
+      if (u) {
+        targetUserId = u.id;
+        targetEmail = u.email;
+        if (u.emailVerified) {
+          return reply.code(400).send({ error: "already_verified" });
+        }
+      } else {
+        return { ok: true, message: "Verification email sent if account exists." };
+      }
+    } else {
+      return reply.code(400).send({ error: "missing_email_or_token" });
+    }
+
+    if (!targetUserId || !targetEmail) {
+      return { ok: true, message: "Verification email sent if account exists." };
+    }
+
+    const verifyToken = randomBytes(32).toString("hex");
+    const verifyTokenHash = createHash("sha256").update(verifyToken).digest("hex");
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    await ctx.db.transaction(async (tx) => {
+      await tx.delete(emailVerifications).where(eq(emailVerifications.userId, targetUserId!));
+      await ctx.db.insert(emailVerifications).values({
+        userId: targetUserId!,
+        tokenHash: verifyTokenHash,
+        expiresAt,
+      });
+    });
+
+    void sendVerificationEmail({
+      to: targetEmail,
+      token: verifyToken,
+      webOrigin: ctx.env.WEB_ORIGIN,
+      env: ctx.env,
+    });
+
+    return { ok: true, message: "Verification email sent." };
   });
 
   /**
@@ -350,7 +460,7 @@ export async function adsRoutes(app: FastifyInstance, ctx: AppContext) {
         if (targets.length > 0 && !targets.some((p) => body.platforms.includes(p))) return false;
       }
       const geoTargets = (c.targetGeoClusters as string[]) ?? [];
-      if (geoTargets.length > 0 && !geoTargets.includes(userCluster)) return false;
+      if (geoTargets.length > 0 && userCluster !== "XX-LOCAL" && !geoTargets.includes(userCluster)) return false;
       return true;
     });
 

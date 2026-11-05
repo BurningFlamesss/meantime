@@ -113,6 +113,14 @@ export const refreshTokenSchema = z.object({
   refreshToken: z.string().min(16).max(256),
 });
 
+export const verifyEmailSchema = z.object({
+  token: z.string().min(16).max(128),
+});
+
+export const resendVerificationSchema = z.object({
+  email: z.string().email().max(254).optional(),
+});
+
 export const advertiserRegisterSchema = z.object({
   email: z.string().email().max(254),
   password: z.string().min(10).max(128),

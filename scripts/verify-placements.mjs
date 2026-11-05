@@ -99,6 +99,7 @@ function runCase(ad){
   thinkHost.remove();
   aboveHost.remove();
   console.log(ad.name+" runCase returning ok at end");
+  return true;
 }
 
 for(const ad of adapters){ assert(runCase(ad), ad.name+" case failed"); }

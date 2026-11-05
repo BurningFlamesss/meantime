@@ -518,6 +518,8 @@ tasks, and reviewer routes are rate-limited per IP/user.
 | `GET` | `/health` | — | Liveness. |
 | `POST` | `/auth/register` | — | Create user, optional device, referral attribution, welcome bonus, token. |
 | `POST` | `/auth/login` | — | Verify Argon2 hash, upsert device, token. |
+| `POST` | `/auth/verify-email` | — | Verify email token and activate user emailVerified status. |
+| `POST` | `/auth/resend-verification` | optional user | Resend a 24-hour verification token email via Nodemailer. |
 | `POST` | `/auth/refresh` | — | Rotate a single-use refresh session. |
 | `POST` | `/auth/logout` | — | Revoke a refresh session. |
 | `POST` | `/ads/prefetch` | user | Pacing, targeting, lease issuance, A/B rotation. |

@@ -71,6 +71,7 @@ private beta · P2 = post-launch / polish
 - [x] Fastify bootstrap, CORS, compression, error handling, `/health`.
 - [x] Environment validation.
 - [x] Register/login with Argon2 and HMAC bearer tokens.
+- [x] Email verification system with Nodemailer, secure token hashing, 24h expiration in `email_verifications`, and endpoints `/auth/verify-email` and `/auth/resend-verification`.
 - [x] Prefetch with pacing, platform/geo targeting, budget filtering, A/B
       rotation, and lease issuance.
 - [x] Bid-weighted selection without replacement, scaled by remaining daily
@@ -103,6 +104,7 @@ private beta · P2 = post-launch / polish
 - [x] Landing page.
 - [x] `/sign-up` and `/sign-in` with inline errors, token persistence, shell
       sign-out, and redirect to the dashboard.
+- [x] `/verify-email` route for confirming registration tokens with resend form fallback, plus verification banner on `/dashboard`.
 - [x] Dashboard with balance, threshold progress, and transparency log.
 - [x] Task center with screenshot upload and history.
 - [x] Referral page with link copy and stats.

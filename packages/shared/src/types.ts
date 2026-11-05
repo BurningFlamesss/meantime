@@ -142,6 +142,12 @@ export interface UserBalance {
   pendingMicro: number;
   lifetimeMicro: number;
   thresholdMicro: number;
+  emailVerified?: boolean;
+}
+
+export interface VerifyEmailResponse {
+  ok: boolean;
+  message: string;
 }
 
 export interface TransparencyLogEntry {

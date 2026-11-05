@@ -267,6 +267,7 @@ MeanTime should feel like a quiet utility, not an ad network:
 | WEB-09 | Referral landing route `/r/:code` that stores the code for signup. | P1 |
 | WEB-10 | Advertiser authentication screens. | P0 |
 | WEB-11 | Admin/reviewer queue for `needs_review` campaigns and tasks. | P1 |
+| WEB-12 | Email verification flow via Nodemailer with `/verify-email` screen and banner. | P1 |
 
 ### 7.4 Moderation
 

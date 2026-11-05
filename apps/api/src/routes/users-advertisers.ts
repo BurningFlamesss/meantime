@@ -90,9 +90,10 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get("/me/balance", async (req, reply) => {
     const auth = requireUser(req, reply, ctx.env.JWT_SECRET);
     if (!auth?.userId) return;
-    const [available, pending, platformRevenue] = await Promise.all([
+    const [available, pending, [userRow], platformRevenue] = await Promise.all([
       balanceOf(ctx.db, ACCOUNTS.user(auth.userId)),
       balanceOf(ctx.db, ACCOUNTS.userPending(auth.userId)),
+      ctx.db.select({ emailVerified: users.emailVerified }).from(users).where(eq(users.id, auth.userId)).limit(1),
       balanceOf(ctx.db, ACCOUNTS.platformRevenue),
     ]);
     void platformRevenue;
@@ -101,6 +102,7 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext) {
       pendingMicro: Number(pending),
       lifetimeMicro: Number(available + pending),
       thresholdMicro: PAYOUT_THRESHOLD_USD,
+      emailVerified: userRow?.emailVerified ?? false,
     };
     return balance;
   });

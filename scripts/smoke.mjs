@@ -566,7 +566,7 @@ async function referralChecks(cpiMicro) {
     count: 5,
     platforms: ["openai"],
   });
-  const ad = prefetched.json?.ads?.[0];
+  const ad = prefetched.json?.ads?.find((a) => a.cpiMicro === cpiMicro) ?? prefetched.json?.ads?.[0];
   check(
     "referred user receives a leased ad",
     prefetched.status === 200 && !!ad?.leaseToken,

@@ -17,6 +17,8 @@ function Dashboard() {
   const [savingSettings, setSavingSettings] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resending, setResending] = useState(false);
+  const [resendStatus, setResendStatus] = useState<string | null>(null);
 
   useEffect(() => {
     api<UserBalance>("/me/balance").then(setBalance).catch((e) => setError(String(e)));
@@ -25,6 +27,23 @@ function Dashboard() {
       .then((s) => setMaxAdDurationSec(s.maxAdDurationSec ?? 15))
       .catch(() => undefined);
   }, []);
+
+  async function resendVerification(): Promise<void> {
+    setResending(true);
+    setResendStatus(null);
+    try {
+      await api<{ ok: boolean; message: string }>("/auth/resend-verification", {
+        method: "POST",
+      });
+      setResendStatus("Sent!");
+      setTimeout(() => setResendStatus(null), 5000);
+    } catch {
+      setResendStatus("Failed to send");
+      setTimeout(() => setResendStatus(null), 5000);
+    } finally {
+      setResending(false);
+    }
+  }
 
   async function updateMaxDuration(sec: number): Promise<void> {
     setMaxAdDurationSec(sec);
@@ -50,6 +69,22 @@ function Dashboard() {
         title="Earnings"
         description="Your balance and a full, auditable log of every ad."
       />
+
+      {balance && balance.emailVerified === false && (
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold">Verify your email:</span>
+            <span>Check your inbox for a verification link to confirm your account.</span>
+          </div>
+          <button
+            onClick={() => void resendVerification()}
+            disabled={resending}
+            className="rounded border border-amber-300 bg-white px-3 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+          >
+            {resending ? "Sending…" : resendStatus ? resendStatus : "Resend email"}
+          </button>
+        </div>
+      )}
 
       {error && <p className="mb-4 text-sm text-red-600">Failed to load: {error}</p>}
 

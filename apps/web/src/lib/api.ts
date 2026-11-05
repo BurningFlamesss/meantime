@@ -1,4 +1,11 @@
-const API_BASE = "http://localhost:3001";
+const envApiBase = (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE;
+const API_BASE =
+  envApiBase ||
+  (typeof window !== "undefined" &&
+  window.location.hostname !== "localhost" &&
+  window.location.hostname !== "127.0.0.1"
+    ? `${window.location.protocol}//${window.location.hostname}:3001`
+    : "http://localhost:3001");
 
 // Advertiser sessions use their own token so an advertiser sign-in never
 // disturbs (or escalates) the signed-in viewer's user session.

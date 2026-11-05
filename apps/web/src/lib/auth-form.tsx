@@ -48,7 +48,7 @@ export function AuthForm({
             : err.status === 401
               ? "Email or password is incorrect."
               : err.status === 429
-                ? "Too many attempts. Try again in a few minutes."
+                ? "Too many sign-in attempts from this IP. Please wait a few minutes before trying again."
                 : err.status === 400
                   ? "Check your email and use a password of at least 10 characters."
                   : "Could not reach the server. Try again.",

@@ -50,6 +50,13 @@
       "when": 1793800165216,
       "tag": "0006_red_veda",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1793871602591,
+      "tag": "0007_spooky_titania",
+      "breakpoints": true
     }
   ]
 }
