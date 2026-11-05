@@ -8,12 +8,20 @@ import {
   userNetworkEvents,
   users,
 } from "@meantime/shared/db";
+import type { LedgerTx } from "../ledger.js";
 
 /**
  * Layer 5 — Composite trust score for pre-withdrawal review.
  * Ts ∈ [0, 100]; ≥80 auto-approve, 50–79 manual review, <50 freeze.
+ *
+ * Accepts the connection or an open transaction handle so the payout flow
+ * can compute the score under the user row lock, inside the same
+ * transaction that records `trustScoreAtRequest`.
  */
-export async function computeTrustScore(db: Db, userId: string): Promise<TrustScoreBreakdown> {
+export async function computeTrustScore(
+  db: Db | LedgerTx,
+  userId: string,
+): Promise<TrustScoreBreakdown> {
   const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
   if (!user) {
     return { total: 0, accountAgeScore: 0, networkScore: 0, payoutUniquenessScore: 0, interactionScore: 0, cadenceScore: 0 };

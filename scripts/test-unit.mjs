@@ -346,6 +346,22 @@ await test("validators: taskSubmissionSchema requires valid http(s) postUrl and 
   assert.equal(invalidUrl.success, false);
 });
 
+await test("validators: taskPresignSchema only accepts proof image content types", () => {
+  for (const ct of shared.PROOF_CONTENT_TYPES) {
+    const ok = shared.taskPresignSchema.safeParse({ contentType: ct });
+    assert.equal(ok.success, true, `${ct} must be presignable`);
+  }
+
+  // Content types outside the allowlist must never get a signed upload URL.
+  const malicious = shared.taskPresignSchema.safeParse({
+    contentType: "text/html",
+  });
+  assert.equal(malicious.success, false);
+
+  const missing = shared.taskPresignSchema.safeParse({});
+  assert.equal(missing.success, false);
+});
+
 /* -------------------------------------------------------------------------
  * 4. Anti-Fraud: Cadence & Pacing
  * ------------------------------------------------------------------------- */

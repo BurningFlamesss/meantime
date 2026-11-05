@@ -22,11 +22,23 @@ export interface LayaConfig {
   enabled: boolean;
 }
 
-export const DEFAULT_LAYA: LayaConfig = {
-  endpoint: process.env.LAYA_ENDPOINT ?? "http://localhost:8000",
-  timeoutMs: 4_000,
-  enabled: (process.env.LAYA_ENABLED ?? "true") === "true",
-};
+/**
+ * Build the moderation config from the validated environment. This must be
+ * the only source of `LayaConfig` in the server: a module-scope
+ * `process.env` read runs before `loadEnv()` loads `.env`, which silently
+ * pinned every deployment to the localhost defaults. Test scripts build
+ * their own `LayaConfig` and pass it explicitly.
+ */
+export function layaConfigFromEnv(env: {
+  LAYA_ENDPOINT: string;
+  LAYA_ENABLED: boolean;
+}): LayaConfig {
+  return {
+    endpoint: env.LAYA_ENDPOINT,
+    timeoutMs: 4_000,
+    enabled: env.LAYA_ENABLED,
+  };
+}
 
 /* ---------------------------- Laya HTTP client --------------------------- */
 /*
@@ -293,7 +305,7 @@ export interface LayaTaskInput {
  */
 export async function moderateCampaign(
   input: LayaCampaignInput,
-  cfg: LayaConfig = DEFAULT_LAYA,
+  cfg: LayaConfig,
 ): Promise<ModerationOutcome> {
   const policy = policyScan(`${input.headline} ${input.bodyText} ${input.ctaText}`, input.targetUrl);
   if (policy.hardReject) {
@@ -388,7 +400,7 @@ export async function moderateCampaign(
  */
 export async function moderateTask(
   input: LayaTaskInput,
-  cfg: LayaConfig = DEFAULT_LAYA,
+  cfg: LayaConfig,
 ): Promise<ModerationOutcome> {
   const reasons: string[] = [];
   const layers = ["policy"];

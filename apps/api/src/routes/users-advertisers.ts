@@ -9,9 +9,11 @@ import {
   clickEventSchema,
   minCpiForDuration,
   payoutRequestSchema,
+  taskPresignSchema,
   taskSubmissionSchema,
   userSettingsUpdateSchema,
   verifyLeaseToken,
+  PROOF_CONTENT_TYPES as PROOF_CONTENT_TYPES_LIST,
   type CampaignStats,
   type TaskSubmission,
   type TransparencyLogEntry,
@@ -33,7 +35,7 @@ import type { AppContext } from "../context.js";
 import { requireAdvertiser, requireUser } from "../context.js";
 import { ACCOUNTS, balanceOf, postTransfer } from "../ledger.js";
 import { computeTrustScore, verdictFor, logFraud } from "../fraud/trust.js";
-import { moderateCampaign, moderateTask } from "../moderation/laya.js";
+import { moderateCampaign, moderateTask, layaConfigFromEnv } from "../moderation/laya.js";
 import { resolveGeo, clusterForIp } from "../geo.js";
 import { referralCodeFor } from "../referrals.js";
 import { rateLimit } from "../rate-limit.js";
@@ -52,7 +54,7 @@ function s3(ctx: AppContext): S3Client {
 }
 
 const MAX_PROOF_BYTES = 5 * 1024 * 1024;
-const PROOF_CONTENT_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const PROOF_CONTENT_TYPES = new Set<string>(PROOF_CONTENT_TYPES_LIST);
 
 /**
  * A presigned key only proves the client asked for a URL. Confirm the object
@@ -86,6 +88,7 @@ async function verifyProofObject(
 }
 
 export async function userRoutes(app: FastifyInstance, ctx: AppContext) {
+  const layaCfg = layaConfigFromEnv(ctx.env);
   /* ------------------------------ balance ------------------------------- */
   app.get("/me/balance", async (req, reply) => {
     const auth = requireUser(req, reply, ctx.env.JWT_SECRET);
@@ -167,14 +170,15 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post("/tasks/presign", async (req, reply) => {
     const auth = requireUser(req, reply, ctx.env.JWT_SECRET);
     if (!auth?.userId) return;
-    const { contentType } = req.body as { contentType?: string };
+    if (!rateLimit(req, reply, "task_presign", 20, 3_600_000, auth.userId)) return;
+    const body = taskPresignSchema.parse(req.body);
     const key = `task-proofs/${auth.userId}/${crypto.randomUUID()}`;
     const url = await getSignedUrl(
       s3(ctx),
       new PutObjectCommand({
         Bucket: ctx.env.S3_BUCKET,
         Key: key,
-        ContentType: contentType ?? "image/png",
+        ContentType: body.contentType,
       }),
       { expiresIn: 900 },
     );
@@ -202,12 +206,15 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext) {
       .limit(1);
 
     // Laya auto-moderation of the task proof image + claimed URL.
-    const moderation = await moderateTask({
-      postUrl: body.postUrl,
-      taskType: body.taskType,
-      screenshotKey,
-      accountAgeDays: user ? (Date.now() - user.createdAt.getTime()) / 86_400_000 : 0,
-    });
+    const moderation = await moderateTask(
+      {
+        postUrl: body.postUrl,
+        taskType: body.taskType,
+        screenshotKey,
+        accountAgeDays: user ? (Date.now() - user.createdAt.getTime()) / 86_400_000 : 0,
+      },
+      layaCfg,
+    );
 
     const status =
       moderation.decision === "auto_approved"
@@ -276,14 +283,12 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext) {
     const amountMicro = BigInt(body.amountMicro);
     const addressNormalized = body.address.trim().toLowerCase();
 
-    const trust = await computeTrustScore(ctx.db, userId);
-    const verdict = verdictFor(trust.total);
-    const status =
-      verdict === "auto_approve" ? "approved" : verdict === "manual_review" ? "auditing" : "frozen";
-
     // The user row is the per-user mutex. Balance, open-request and destination
     // checks all run under it, so two concurrent withdrawals can never both
-    // pass the balance check and overdraw the account.
+    // pass the balance check and overdraw the account. The trust score is
+    // computed under the same lock: computing it before the transaction let a
+    // concurrent deposit or network event change the score between the read
+    // and the request row's `trustScoreAtRequest` commit.
     const outcome = await ctx.db.transaction(async (tx) => {
       const [user] = await tx
         .select()
@@ -293,6 +298,11 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext) {
         .limit(1);
       if (!user) return { error: "user_missing" } as const;
       if (user.isFrozen) return { error: "account_frozen" } as const;
+
+      const trust = await computeTrustScore(tx, userId);
+      const verdict = verdictFor(trust.total);
+      const status =
+        verdict === "auto_approve" ? "approved" : verdict === "manual_review" ? "auditing" : "frozen";
 
       const open = await tx
         .select({ id: payoutRequests.id })
@@ -387,7 +397,7 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext) {
         }
       }
 
-      return { request } as const;
+      return { request, trust } as const;
     });
 
     if ("error" in outcome) {
@@ -412,7 +422,7 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext) {
       return reply.code(400).send({ error: outcome.error });
     }
 
-    const request = outcome.request;
+    const { request, trust } = outcome;
     if (request.status === "frozen") {
       await logFraud(ctx.db, {
         userId,
@@ -451,6 +461,8 @@ export async function userRoutes(app: FastifyInstance, ctx: AppContext) {
 }
 
 export async function advertiserRoutes(app: FastifyInstance, ctx: AppContext) {
+  const layaCfg = layaConfigFromEnv(ctx.env);
+
   app.post("/advertiser/campaigns/:id/variants", async (req, reply) => {
     const auth = requireAdvertiser(req, reply, ctx.env.JWT_SECRET);
     if (!auth?.advertiserId) return;
@@ -470,16 +482,38 @@ export async function advertiserRoutes(app: FastifyInstance, ctx: AppContext) {
     }
     const label = existing.length === 0 ? "B" : "C";
 
-    // Each variant goes through Laya independently.
-    const moderation = await moderateCampaign({
-      headline: body.headline,
-      bodyText: body.bodyText,
-      ctaText: body.ctaText,
-      targetUrl: campaign.targetUrl,
-      advertiserAgeDays: 999, // reputation already established by base campaign
-      advertiserRejectedCount: 0,
-      advertiserApprovedCount: 999,
-    });
+    // Each variant goes through Laya independently, with the advertiser's
+    // real reputation — the same stats the base-campaign path uses, so a
+    // rejected advertiser cannot slip cleaner copy through as a variant.
+    const [advertiser] = await ctx.db
+      .select()
+      .from(advertisers)
+      .where(eq(advertisers.id, auth.advertiserId))
+      .limit(1);
+    const ageDays = advertiser
+      ? (Date.now() - advertiser.createdAt.getTime()) / 86_400_000
+      : 0;
+    const rejected = await ctx.db
+      .select({ count: sql<number>`count(*)` })
+      .from(campaigns)
+      .where(and(eq(campaigns.advertiserId, auth.advertiserId), eq(campaigns.status, "rejected")));
+    const approved = await ctx.db
+      .select({ count: sql<number>`count(*)` })
+      .from(campaigns)
+      .where(and(eq(campaigns.advertiserId, auth.advertiserId), eq(campaigns.status, "active")));
+
+    const moderation = await moderateCampaign(
+      {
+        headline: body.headline,
+        bodyText: body.bodyText,
+        ctaText: body.ctaText,
+        targetUrl: campaign.targetUrl,
+        advertiserAgeDays: ageDays,
+        advertiserRejectedCount: Number(rejected[0]?.count ?? 0),
+        advertiserApprovedCount: Number(approved[0]?.count ?? 0),
+      },
+      layaCfg,
+    );
 
     const [variant] = await ctx.db
       .insert(campaignVariants)
@@ -567,15 +601,18 @@ export async function advertiserRoutes(app: FastifyInstance, ctx: AppContext) {
     }
 
     // Laya auto-moderation.
-    const moderation = await moderateCampaign({
-      headline: body.headline,
-      bodyText: body.bodyText,
-      ctaText: body.ctaText,
-      targetUrl: body.targetUrl,
-      advertiserAgeDays: ageDays,
-      advertiserRejectedCount: Number(rejected[0]?.count ?? 0),
-      advertiserApprovedCount: Number(approved[0]?.count ?? 0),
-    });
+    const moderation = await moderateCampaign(
+      {
+        headline: body.headline,
+        bodyText: body.bodyText,
+        ctaText: body.ctaText,
+        targetUrl: body.targetUrl,
+        advertiserAgeDays: ageDays,
+        advertiserRejectedCount: Number(rejected[0]?.count ?? 0),
+        advertiserApprovedCount: Number(approved[0]?.count ?? 0),
+      },
+      layaCfg,
+    );
 
     const status =
       moderation.decision === "auto_approved"
@@ -707,7 +744,7 @@ export async function advertiserRoutes(app: FastifyInstance, ctx: AppContext) {
     }
 
     // Geo from request IP; raw IP is resolved to a cluster and discarded.
-    const geo = resolveGeo(req.ip);
+    const geo = resolveGeo(req.ip, ctx.env.IP_HASH_SALT);
     const inserted = await ctx.db
       .insert(clickEvents)
       .values({

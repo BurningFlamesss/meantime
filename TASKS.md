@@ -404,17 +404,29 @@ raw IPs.
 
 ### Security
 
-- [x] Rate limiting on auth, prefetch, telemetry, tasks, payouts, clicks, and
-      reviewer routes.
+- [x] Rate limiting on auth, prefetch, telemetry, tasks (presign + submit),
+      payouts, clicks, and reviewer routes.
 - [x] Persist and rotate refresh tokens; logout revokes the session.
 - [ ] Revoke all sessions on password change (no password-change flow yet).
-- [ ] Add email verification and password reset.
+- [x] Email verification shipped (register → verify → resend, enumeration-safe).
+      Password reset remains open.
 - [x] Verify the lease signature in `POST /ads/click` before recording a click.
 - [x] Use the verified lease payload in `persist()` instead of re-parsing the
       token.
-- [ ] Add request-size limits and stricter schema bounds.
+- [x] Explicit Fastify `bodyLimit` (1 MiB, enforced on decompressed bodies) and
+      zod validation on every route body, including `/tasks/presign`.
+- [x] All config (`IP_HASH_SALT`, `LAYA_*`, `LOG_LEVEL`) validated through the
+      env schema and threaded from `AppContext` — no module-scope `process.env`
+      reads that silently ignore `.env`.
+- [x] Server-authoritative view duration: the signed lease's `dur` is the only
+      requirement consulted at settlement; the client-reported `durationSec`
+      is diagnostic only.
+- [x] Payout trust score computed inside the request transaction, under the
+      user row lock, matching the recorded `trustScoreAtRequest`.
 - [ ] Add CSRF strategy if cookies are introduced (bearer-only today).
-- [ ] Add secret rotation runbook.
+- [ ] Add secret rotation runbook (`LEASE_HMAC_SECRET`, `JWT_SECRET`, session
+      invalidation steps; the `IP_HASH_SALT` procedure is documented in
+      `ARCHITECTURE.md` §10).
 - [ ] Consider per-IP/per-user throttles on registration.
 
 ### Correctness and money
@@ -427,12 +439,15 @@ raw IPs.
 - [x] Campaign budget enforcement at telemetry time under a campaign row lock.
 - [x] Handle campaign exhaustion (`spentTodayMicro >= dailyBudgetMicro`) by
       pausing/exhausting status.
-- [ ] Use `bigint`/string in prefetch `cpiMicro` to avoid future precision loss.
+- [x] Use `bigint`/string in prefetch `cpiMicro` (serialized as a decimal
+      string; the extension never consumes it).
 - [x] Campaign/variant moderation status transitions after human review.
 - [x] Uniqueness/idempotency for task submissions (one live reward per post URL).
 
 ### Trust and safety
 
+- [x] Variant moderation uses the advertiser's real reputation (age, rejected
+      and approved campaign counts) — same inputs as base-campaign moderation.
 - [x] Reviewer/admin UI and API for campaigns (`needs_review` → active/rejected),
       variants, and tasks (`pending` → approved/rejected).
 - [x] Payout review queue for `auditing` and `frozen` requests, with refund on

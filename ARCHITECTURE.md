@@ -163,7 +163,9 @@ pnpm --filter @meantime/web start
 
 ### 4.3 Environment variables
 
-API (`apps/api/.env`, loaded automatically by `loadEnv()` when present):
+API (`apps/api/.env`, loaded automatically by `loadEnv()` when present — parsed per
+key, so one malformed line never silently drops the rest of the file; shell
+environment values always win over the file):
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
@@ -177,10 +179,10 @@ API (`apps/api/.env`, loaded automatically by `loadEnv()` when present):
 | `S3_REGION` | no | `us-east-1` | S3 client region. |
 | `PORT` | no | `3001` | API port. |
 | `WEB_ORIGIN` | no | `http://localhost:3000` | CORS origin and referral link base. |
-| `IP_HASH_SALT` | no | dev placeholder | Salt for IP equality hashes. **Change in production.** |
-| `LAYA_ENDPOINT` | no | `http://localhost:8000` | Moderation classifier base URL. |
+| `IP_HASH_SALT` | yes, ≥16 chars | — | Salt for IP equality hashes, threaded from the validated env into every `resolveGeo`/`clusterForIp` call. A short or missing salt makes stored IP hashes brute-forceable over the IPv4 space. |
+| `LAYA_ENDPOINT` | no | `http://localhost:8000` | Moderation classifier base URL. Validated as a URL; served routes build their `LayaConfig` from the validated env (`layaConfigFromEnv`), never from a module-scope read. |
 | `LAYA_ENABLED` | no | `true` | Disable to force `needs_review`. |
-| `LOG_LEVEL` | no | `info` | Fastify log level. |
+| `LOG_LEVEL` | no | `info` | Fastify log level (validated against the pino set). |
 
 Extension:
 
@@ -230,9 +232,11 @@ sequenceDiagram
 
 Notes:
 
-- `cpiMicro` is serialized as a JS number in the prefetch response. Values are
-  small enough for v0.1 but should be stringified before bids exceed
-  `Number.MAX_SAFE_INTEGER` micro-dollars.
+- `cpiMicro` is serialized as a decimal string in the prefetch response
+  (Postgres bigint → string, like every other money field), so a bid is never
+  truncated at `Number.MAX_SAFE_INTEGER` micro-dollars. The advertiser-side
+  campaign *input* stays a validated integer; only the server-authoritative
+  ad payload on the wire is a string.
 - Pacing at prefetch counts *consumed leases* in the last hour. The extension
   also enforces pacing against a local prompt counter.
 - Selection is a bid-weighted sample **without replacement**

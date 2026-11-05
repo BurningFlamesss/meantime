@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, desc, eq, gte, isNull } from "drizzle-orm";
 import {
-  MIN_VIEWABLE_MS,
+  CAMPAIGN_DURATION,
   REVENUE_SHARE,
   telemetryBatchSchema,
   verifyLeaseToken,
@@ -27,7 +27,7 @@ export async function telemetryRoutes(app: FastifyInstance, ctx: AppContext) {
     const userId = auth.userId;
 
     const batch = telemetryBatchSchema.parse(req.body);
-    const geoCluster = clusterForIp(req.ip);
+    const geoCluster = clusterForIp(req.ip, ctx.env.IP_HASH_SALT);
 
     // Pull the last hour of history for cadence analysis.
     const hourAgo = new Date(Date.now() - 3600_000);
@@ -143,13 +143,19 @@ async function processEvent(
   const claimedRow = claimed[0];
   if (!claimedRow) {
     reasons.push("lease_already_consumed");
-    await persist(ctx, batchId, userId, event, lease.lid, "rejected", reasons, 0n, lease.cid, geoCluster);
+    await persist(
+      ctx, batchId, userId, event, lease.lid, "rejected", reasons, 0n, lease.cid, geoCluster,
+      lease.dur ?? CAMPAIGN_DURATION.DEFAULT_SEC,
+    );
     return { impressionId: event.impressionId, status: "rejected", earnedMicro: 0, reasons };
   }
   const campaignId = claimedRow.campaignId;
   if (campaignId !== lease.cid) {
     reasons.push("lease_campaign_mismatch");
-    await persist(ctx, batchId, userId, event, lease.lid, "rejected", reasons, 0n, campaignId, geoCluster);
+    await persist(
+      ctx, batchId, userId, event, lease.lid, "rejected", reasons, 0n, campaignId, geoCluster,
+      lease.dur ?? CAMPAIGN_DURATION.DEFAULT_SEC,
+    );
     return { impressionId: event.impressionId, status: "rejected", earnedMicro: 0, reasons };
   }
 
@@ -158,7 +164,13 @@ async function processEvent(
   if (!event.pohi.aiMutationVerified) reasons.push("no_ai_mutation");
 
   /* ---- Threshold & batch-level cadence ---- */
-  const requiredMs = (lease.dur ?? event.durationSec ?? 5) * 1_000;
+  // The signed lease carries the required view duration as issued by the
+  // server (auth-ads.ts sets `dur` at lease creation). Never consult the
+  // client-reported `event.durationSec` here: that would let a client claim
+  // a 2-second requirement against a 15-second campaign. The 5s fallback
+  // only exists for legacy leases minted before `dur` was signed into the
+  // payload, and fails closed to the default duration.
+  const requiredMs = (lease.dur ?? CAMPAIGN_DURATION.DEFAULT_SEC) * 1_000;
   const viewableEnough = event.cumulativeVisibleMs >= requiredMs;
   if (!viewableEnough) reasons.push("below_threshold");
   if (batchCriticalFindings.length > 0) reasons.push(...batchCriticalFindings.map((f) => f.rule));
@@ -171,7 +183,10 @@ async function processEvent(
       : "rejected";
 
   if (!verified) {
-    await persist(ctx, batchId, userId, event, lease.lid, status, reasons, 0n, campaignId, geoCluster);
+    await persist(
+      ctx, batchId, userId, event, lease.lid, status, reasons, 0n, campaignId, geoCluster,
+      lease.dur ?? CAMPAIGN_DURATION.DEFAULT_SEC,
+    );
     return { impressionId: event.impressionId, status, earnedMicro: 0, reasons };
   }
 
@@ -219,7 +234,7 @@ async function processEvent(
         cumulativeVisibleMs: Math.round(event.cumulativeVisibleMs),
         hoverMs: Math.round(event.hoverMs ?? 0),
         hoverIntentional: event.hoverIntentional ?? false,
-        durationSec: campaign.durationSec ?? lease.dur ?? event.durationSec ?? 5,
+        durationSec: campaign.durationSec ?? lease.dur ?? CAMPAIGN_DURATION.DEFAULT_SEC,
         geoCluster,
         earned: true,
         earnedMicro,
@@ -278,7 +293,10 @@ async function processEvent(
 
   if (!settlement.ok) {
     reasons.push(settlement.reason);
-    await persist(ctx, batchId, userId, event, lease.lid, "rejected", reasons, 0n, campaignId, geoCluster);
+    await persist(
+      ctx, batchId, userId, event, lease.lid, "rejected", reasons, 0n, campaignId, geoCluster,
+      lease.dur ?? CAMPAIGN_DURATION.DEFAULT_SEC,
+    );
     return { impressionId: event.impressionId, status: "rejected", earnedMicro: 0, reasons };
   }
 
@@ -301,6 +319,8 @@ async function persist(
   earnedMicro: bigint,
   campaignId: string | null,
   geoCluster: string = "XX-UNKNOWN",
+  /** Server-authoritative view duration from the verified lease, never the client claim. */
+  durationSec: number = CAMPAIGN_DURATION.DEFAULT_SEC,
 ): Promise<void> {
   if (!campaignId) return;
   try {
@@ -320,7 +340,7 @@ async function persist(
       cumulativeVisibleMs: Math.round(event.cumulativeVisibleMs),
       hoverMs: Math.round(event.hoverMs ?? 0),
       hoverIntentional: event.hoverIntentional ?? false,
-      durationSec: event.durationSec ?? 5,
+      durationSec,
       geoCluster,
       earned: false,
       earnedMicro,

@@ -73,7 +73,7 @@ async function issueSession(
 
 /** Record a geo/network signal for fraud scoring. Raw IP is hashed, never stored. */
 async function recordNetworkEvent(ctx: AppContext, userId: string, ip: string): Promise<void> {
-  const geo = resolveGeo(ip);
+  const geo = resolveGeo(ip, ctx.env.IP_HASH_SALT);
   const today = new Date().toISOString().slice(0, 10);
   await ctx.db
     .insert(userNetworkEvents)
@@ -99,7 +99,7 @@ export async function authRoutes(app: FastifyInstance, ctx: AppContext) {
     // Resolve in memory at the edge and persist only the salted hash, so the
     // sybil/self-referral equality checks keep working without a raw IP ever
     // reaching the database.
-    const geo = resolveGeo(ip);
+    const geo = resolveGeo(ip, ctx.env.IP_HASH_SALT);
     const [user] = await ctx.db
       .insert(users)
       .values({
@@ -437,7 +437,7 @@ export async function adsRoutes(app: FastifyInstance, ctx: AppContext) {
     // geo-targeted. Geo is matched on the request IP's cluster; the raw IP
     // is never stored or returned.
     const today = new Date().toISOString().slice(0, 10);
-    const userCluster = clusterForIp(req.ip);
+    const userCluster = clusterForIp(req.ip, ctx.env.IP_HASH_SALT);
     const rows = await ctx.db
       .select()
       .from(campaigns)
@@ -565,7 +565,7 @@ export async function adsRoutes(app: FastifyInstance, ctx: AppContext) {
         leaseToken,
         issuedAt: nowSec,
         expiresAt: nowSec + LEASE.TTL_SECONDS,
-        cpiMicro: Number(campaign.cpiMicro),
+        cpiMicro: campaign.cpiMicro.toString(),
         durationSec: campaign.durationSec ?? 5,
         headline: copy.headline,
         bodyText: copy.bodyText,

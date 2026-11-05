@@ -3,6 +3,7 @@ import {
   AD_COPY_LIMITS,
   CAMPAIGN_DURATION,
   PLATFORM_IDS,
+  PROOF_CONTENT_TYPES,
   TELEMETRY,
 } from "./constants.js";
 
@@ -142,6 +143,15 @@ export const taskSubmissionSchema = z.object({
     .min(24)
     .max(256)
     .regex(/^task-proofs\/[0-9a-f-]{36}\/[0-9a-f-]{36}$/i, "invalid_screenshot_key"),
+});
+
+/**
+ * Request body for POST /tasks/presign. The content type is pinned to the
+ * exact set /tasks/submit later verifies on the uploaded object, so a client
+ * can never mint a presigned URL for an arbitrary content type.
+ */
+export const taskPresignSchema = z.object({
+  contentType: z.enum(PROOF_CONTENT_TYPES),
 });
 
 export const payoutRequestSchema = z.object({

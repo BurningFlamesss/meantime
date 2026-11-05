@@ -39,8 +39,13 @@ export interface PrefetchedAd {
   leaseToken: string;
   issuedAt: number;
   expiresAt: number;
-  /** Advertiser bid per verified view, micro-dollars. Server-authoritative. */
-  cpiMicro: number;
+  /**
+   * Advertiser bid per verified view, micro-dollars, as a decimal string.
+   * Postgres stores it as a bigint; JSON has no bigint type, so the wire
+   * format is a string and the client never loses precision on large bids.
+   * Server-authoritative.
+   */
+  cpiMicro: string;
   /** Required view duration in seconds (2s - 15s). Defaults to 5s. */
   durationSec?: number;
   headline: string;

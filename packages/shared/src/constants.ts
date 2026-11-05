@@ -20,6 +20,13 @@ export const REFERRAL_BONUS_USD = 500_000; // $0.50 to the referrer
 export const REFERRAL_QUALIFY_EARNINGS_USD = 1_000_000; // $1.00 verified
 export const MAX_CAMPAIGN_VARIANTS = 3;
 
+/**
+ * Accepted task-proof image content types. The single source for both the
+ * presign validation and the submit-time HeadObject check, so a client can
+ * never mint a presigned URL for an object type review would later reject.
+ */
+export const PROOF_CONTENT_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
+
 /** Cumulative active-viewport time required for an impression to be paid. Default 5s. */
 export const MIN_VIEWABLE_MS = 5_000;
 

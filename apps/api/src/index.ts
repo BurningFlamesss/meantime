@@ -15,8 +15,14 @@ async function main(): Promise<void> {
   const ctx = buildContext(env);
 
   const app = Fastify({
+    // Bound request bodies explicitly. The limit applies to the *decompressed*
+    // received bytes, so a compressed telemetry batch cannot balloon past it
+    // (zip-bomb guard). A telemetry batch of 50 events at the schema's field
+    // maxima is well under 1 MiB; larger blobs are noise, not legitimate
+    // traffic.
+    bodyLimit: 1_048_576,
     logger: {
-      level: process.env.LOG_LEVEL ?? "info",
+      level: env.LOG_LEVEL,
       // The raw IP is available to handlers via req.ip but must never reach
       // logs. Authorization/cookie headers are redacted too.
       redact: {

@@ -17,9 +17,9 @@ export interface GeoResolution {
   ipHash: string; // SHA-256 with a per-deploy salt, for equality checks only
 }
 
-const SALT = process.env.IP_HASH_SALT ?? "meantime-ip-salt-change-me";
-
-/** Coarse region bands by first octet — replace with a real GeoIP dataset. */
+/**
+ * Coarse region bands by first octet — replace with a real GeoIP dataset.
+ */
 const REGION_BY_FIRST_OCTET: Array<[min: number, max: number, cluster: string]> = [
   [3, 15, "NA-EAST"],
   [16, 34, "NA-WEST"],
@@ -39,8 +39,14 @@ const REGION_BY_FIRST_OCTET: Array<[min: number, max: number, cluster: string]> 
   [202, 203, "APAC-SE"],
 ];
 
-export function resolveGeo(ip: string | undefined): GeoResolution {
-  const ipHash = createHash("sha256").update(`${SALT}:${ip ?? ""}`).digest("hex");
+/**
+ * The salt comes from the validated environment, threaded through by callers.
+ * It must not be read at module scope: ES-module top-level code runs before
+ * `loadEnv()` populates process.env, which would silently bake in a
+ * placeholder for every deployment.
+ */
+export function resolveGeo(ip: string | undefined, salt: string): GeoResolution {
+  const ipHash = createHash("sha256").update(`${salt}:${ip ?? ""}`).digest("hex");
   if (!ip) return { cluster: "XX-UNKNOWN", asn: null, ipHash };
 
   // Private / loopback / CGNAT ranges get a local cluster.
@@ -67,6 +73,6 @@ export function resolveGeo(ip: string | undefined): GeoResolution {
  * Map an IP to a geo cluster for campaign-target matching. Returns the same
  * coarse label used everywhere else so the raw IP never crosses this module.
  */
-export function clusterForIp(ip: string | undefined): string {
-  return resolveGeo(ip).cluster;
+export function clusterForIp(ip: string | undefined, salt: string): string {
+  return resolveGeo(ip, salt).cluster;
 }
