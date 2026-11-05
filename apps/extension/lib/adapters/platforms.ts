@@ -280,6 +280,34 @@ export class ClaudeAdapter extends BaseAdapter {
 export class DeepseekAdapter extends BaseAdapter {
   readonly platformId = "deepseek";
   readonly config = PLATFORM_CONFIGS.deepseek;
+
+  /**
+   * DeepSeek nests the user bubble inside a message row. Mount after the row,
+   * not inside the bubble, so the ad spans the conversation column.
+   */
+  override getThinkingSlot(): MountTarget | null {
+    const user = this.findLatestUserMessage();
+    if (!user) return null;
+    const row =
+      user.closest<HTMLElement>(
+        "[data-testid*='message-row'], [class*='message-row'], [class*='chat-message'], article, li",
+      ) ?? user;
+    return { element: row, position: "after" };
+  }
+
+  override getAboveComposerSlot(): MountTarget | null {
+    const input = this.qs<HTMLElement>(this.config.promptInputSelector);
+    if (!input) return null;
+    const area =
+      input.closest<HTMLElement>(
+        "form, [class*='input-container'], [class*='chat-input'], [class*='composer']",
+      ) ??
+      input.parentElement?.parentElement ??
+      input.parentElement;
+    if (!area) return null;
+    if (getComputedStyle(area).position === "static") area.style.position = "relative";
+    return { element: area, position: "append" };
+  }
 }
 
 export class GrokAdapter extends BaseAdapter {
@@ -294,5 +322,32 @@ export class GrokAdapter extends BaseAdapter {
       return pathname.startsWith("/i/grok");
     }
     return false;
+  }
+
+  /** Grok renders each bubble inside a message row; anchor after the row. */
+  override getThinkingSlot(): MountTarget | null {
+    const user = this.findLatestUserMessage();
+    if (!user) return null;
+    const row =
+      user.closest<HTMLElement>(
+        "[data-testid='message-row'], [class*='message-row'], [class*='conversation-turn'], [class*='chat-message'], article, li",
+      ) ??
+      user.parentElement ??
+      user;
+    return { element: row, position: "after" };
+  }
+
+  override getAboveComposerSlot(): MountTarget | null {
+    const input = this.qs<HTMLElement>(this.config.promptInputSelector);
+    if (!input) return null;
+    const area =
+      input.closest<HTMLElement>(
+        "form, [data-testid*='composer'], [class*='query-bar'], [class*='composer'], [class*='input-area'], [class*='input-container']",
+      ) ??
+      input.parentElement?.parentElement ??
+      input.parentElement;
+    if (!area) return null;
+    if (getComputedStyle(area).position === "static") area.style.position = "relative";
+    return { element: area, position: "append" };
   }
 }

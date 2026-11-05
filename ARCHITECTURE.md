@@ -35,7 +35,7 @@ flowchart LR
     LAYA["Laya classifier<br/>laya-serve · POST /v1/systemone"]
   end
 
-  AI["AI platforms<br/>ChatGPT · Gemini · Claude"]
+  AI["AI platforms<br/>ChatGPT · Gemini · Claude<br/>DeepSeek · Grok"]
 
   BG -- "prefetch / telemetry / clicks" --> API
   CS -- "reads DOM (never prompt text)" --> AI
@@ -243,8 +243,9 @@ Notes:
   24h of impressions, and skips campaigns the client already holds
   (`excludeCampaignIds`), so a cleared extension cache cannot bypass frequency
   caps and no lease is wasted on a duplicate.
-- Prefetch only runs on the allowlisted hosts (ChatGPT, Claude, Gemini); the
-  content-script match list and adapter registry are the two activation gates.
+- Prefetch only runs on the five supported hosts (ChatGPT, Claude, Gemini,
+  DeepSeek, Grok); the content-script match list and adapter registry are the
+  two activation gates. Grok is path-scoped to `x.com/i/grok`.
 - Cache size and reads ignore expired, malformed, and duplicate leases, so a
   stale ring buffer cannot suppress the low-water refill. Every write
   normalizes the buffer, and prefetch merges re-read the pool inside the same
@@ -454,7 +455,7 @@ store cluster + hash only; discard raw IP
 | `entrypoints/background.ts` | Alarm-driven cache prefetch, telemetry flush, message router (`take_ad`, `queue_impression`, `ad_click`, `flush_now`, `cache_status`). |
 | `entrypoints/content.ts` | Controller: attach to composer, detect submission, mount widget, watch generation, finalize event, client pacing. |
 | `lib/adapters/base.ts` | `PlatformAdapter` interface and default anchor resolution. |
-| `lib/adapters/platforms.ts` | Adapter implementations; only ChatGPT, Claude, and Gemini are registered. |
+| `lib/adapters/platforms.ts` | Five adapter implementations; Grok has path-scoped `x.com/i/grok` matching, and DeepSeek/Grok anchor after their message rows. |
 | `lib/ad-cache.ts` | Self-healing ring buffer, lease deduplication, expiry/cap/cooldown filtering, atomic pop, local impression history. |
 | `lib/ad-widget.ts` | Closed Shadow DOM UI, bottom-edge view-progress bar, dismiss/snooze menu, CTA. |
 | `lib/viewport-timer.ts` | IntersectionObserver + visibility + focus integration and `performance.now()` accounting. |

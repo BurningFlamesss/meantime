@@ -37,7 +37,7 @@ private beta · P2 = post-launch / polish
 - [x] HMAC-SHA256 lease signing/verification on WebCrypto.
 - [x] Shared constants for revenue split, viewability, pacing, cadence, trust,
       cache, telemetry, and moderation.
-- [x] Platform selector configs for five AI platforms; only ChatGPT, Claude, and Gemini are activated.
+- [x] Platform selector configs for five AI platforms; all five (ChatGPT, Claude, Gemini, DeepSeek, Grok) are activated.
 - [x] Double-entry ledger helpers.
 
 ### Phase 2 — Extension core and multi-LLM adapters
@@ -46,7 +46,7 @@ private beta · P2 = post-launch / polish
 - [x] Idle/startup prefetch with ring-buffer cache and low-water mark.
 - [x] Local deduplication (expiry, per-day cap, cooldown).
 - [x] Passive Enter/send-button trigger detection.
-- [x] ChatGPT, Claude, and Gemini adapters registered. Grok/DeepSeek adapters are retained but not activated, so the content script only runs on the three allowed domains.
+- [x] Five platform adapters registered: ChatGPT, Claude, Gemini, DeepSeek, and Grok. Grok is path-scoped to `x.com/i/grok`; DeepSeek covers `chat.deepseek.com` and its apex domain.
 - [x] Closed Shadow DOM ad widget with a bottom-edge view-progress bar, CTA,
       dismiss, snooze menu, and placement options.
 - [x] Cumulative viewport timer (IntersectionObserver + visibility + focus).
@@ -261,9 +261,9 @@ private beta · P2 = post-launch / polish
 - [x] Extension apex domain match patterns: Fixed content script match pattern
       omission where `*://*.chatgpt.com/*` failed to match naked/apex domain
       `https://chatgpt.com/c/*`. Added explicit apex patterns (`*://chatgpt.com/*`,
-      `*://claude.ai/*`, `*://gemini.google.com/*`, etc.) to both
-      `apps/extension/entrypoints/content.ts` and `apps/extension/lib/adapters/registry.ts`.
-      The allowlist is now deliberately limited to ChatGPT, Claude, and Gemini.
+      `*://claude.ai/*`, `*://gemini.google.com/*`, `*://grok.com/*`, `*://x.com/i/grok*`,
+      `*://chat.deepseek.com/*`, etc.) to both `apps/extension/entrypoints/content.ts`
+      and `apps/extension/lib/adapters/registry.ts`.
 - [x] ChatGPT DOM resilience & fallback mount: Hardened selectors in `packages/shared/src/platforms.ts`
       (removed tag restrictions on `[data-message-author-role='user']` and
       `[data-message-author-role='assistant']`, expanded `sendButtonSelector` and

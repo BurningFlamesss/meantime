@@ -75,7 +75,7 @@ export const PLATFORM_CONFIGS: Record<PlatformId, PlatformSelectorConfig> = {
   },
   deepseek: {
     platformId: "deepseek",
-    hostPatterns: ["chat.deepseek.com"],
+    hostPatterns: ["chat.deepseek.com", "deepseek.com"],
     promptInputSelector: "textarea#chat-input, div[contenteditable='true']",
     sendButtonSelector: "div[role='button'][aria-label='Send'], button.send-button",
     thinkingIndicatorSelector: ".thinking-status, .loading-dot",

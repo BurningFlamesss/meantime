@@ -212,7 +212,7 @@ MeanTime should feel like a quiet utility, not an ad network:
 
 | ID | Requirement | Priority |
 |---|---|---|
-| EXT-01 | Support ChatGPT, Claude, and Gemini only; activate the content script solely on those hosts. Grok/DeepSeek adapters may stay in the codebase but must not be registered or matched. | P0 |
+| EXT-01 | Support ChatGPT, Claude, Gemini, DeepSeek, and Grok with host-scoped content scripts; Grok is path-scoped to `x.com/i/grok`. | P0 |
 | EXT-02 | Detect prompt submission via Enter (without Shift/composition) or send-button pointerdown using passive capture listeners. | P0 |
 | EXT-03 | Prefetch ads only while idle or when the local cache is below the low-water mark. | P0 |
 | EXT-04 | Cache at most 25 ads; prefetch in batches of 15; drop expired, malformed, and duplicate leases on read so stale entries never inflate the cache or block the low-water refill. | P0 |
