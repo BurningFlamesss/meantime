@@ -21,6 +21,7 @@
     "laya:bench": "node scripts/laya-bench.mjs"
   },
   "devDependencies": {
+    "playwright": "^1.65.0",
     "prettier": "^3.4.2",
     "turbo": "^2.3.3",
     "typescript": "^5.7.2"

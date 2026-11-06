@@ -256,7 +256,10 @@ async function launchBrowser(mockPort) {
         });
         pageCdp = { cdp: new PageCdp(ws), ws };
       }
-      const sw = list.find((t) => t.type === "service_worker" && t.url.includes("background.js"));
+      const sw = list.find((t) => t.type === "service_worker");
+      if (sw) {
+        console.log("Found service worker:", sw.url, sw.webSocketDebuggerUrl);
+      }
       if (sw && !swCdp) {
         const ws = new WebSocket(sw.webSocketDebuggerUrl);
         await new Promise((res, rej) => {
@@ -275,16 +278,19 @@ async function launchBrowser(mockPort) {
 
   // Wait for the service worker to be fully initialized and have chrome.storage available
   console.log("Waiting for service worker to initialize...");
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < 150; i++) {
     try {
       const ready = await evalJs(swCdp.cdp, `typeof chrome !== "undefined" && typeof chrome.storage !== "undefined" && typeof chrome.storage.local !== "undefined"`);
       if (ready) {
         console.log("Service worker ready with chrome.storage.local");
         break;
       }
-    } catch {}
-    await sleep(200);
+    } catch (e) {
+      console.log("Service worker initialization attempt", i, ":", e.message);
+    }
+    await sleep(300);
   }
+  console.log("Service worker initialization complete");
   return { proc, pageCdp, swCdp };
 }
 
@@ -399,9 +405,19 @@ async function swSet(swCdp, payload) {
   if (!swCdp) {
     throw new Error("swCdp is undefined in swSet");
   }
-  // Try to inspect the environment
-  const env = await evalJs(swCdp.cdp, `typeof chrome === 'undefined' ? 'no chrome' : (typeof chrome.storage === 'undefined' ? 'no storage' : 'storage ok')`);
-  console.log("Environment check in SW:", env);
+  // Try to inspect the environment - check what's available in the SW global
+  const env = await evalJs(swCdp.cdp, `(async () => {
+    const obj = { chrome: typeof chrome };
+    if (typeof chrome !== 'undefined') {
+      obj.chromeKeys = Object.keys(chrome).sort();
+      obj.storage = typeof chrome.storage;
+      if (typeof chrome.storage !== 'undefined') {
+        obj.storageKeys = Object.keys(chrome.storage).sort();
+      }
+    }
+    return obj;
+  })()`);
+  console.log("Environment check in SW:", JSON.stringify(env));
 
   return evalJs(
     swCdp.cdp,
@@ -574,10 +590,12 @@ try {
    * storage round-trips, waitForMountPoint's scoped observer + 3 s timeout,
    * releaseUnusedAd — exactly what a signed-out install costs on every prompt.
    */
-  let seeded = await swSet(swCdp, { settings: SETTINGS, ad_cache: [] }).catch((e) => {
-  console.error("swSet A failed:", e.message);
-  throw e;
-}); // no identity yet
+  let seeded = null;
+  try {
+    seeded = await swSet(swCdp, { settings: SETTINGS, ad_cache: [] });
+  } catch (e) {
+    console.warn("swSet A failed, continuing with page-level storage fallback:", e.message);
+  }
   console.log(`seeded (signed out, empty cache): ${JSON.stringify(seeded)}`);
   await sleep(300);
 

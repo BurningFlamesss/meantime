@@ -528,12 +528,17 @@ function AdvertiserPortalContent({ onSignedOut }: { onSignedOut: () => void }) {
                   </button>
                 )}
               </div>
-              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-6">
                 <Stat label="Views" value={String(analytics.totals.views)} />
                 <Stat label="Verified 5s views" value={String(analytics.totals.verifiedViews)}
                   hint={`${(analytics.totals.completionRate * 100).toFixed(0)}% completion`} />
                 <Stat label="Intentional hovers" value={String(analytics.totals.intentionalHovers)}
                   hint={`${(analytics.totals.hoverRate * 100).toFixed(2)}% of views`} />
+                <Stat
+                  label="Hover rate"
+                  value={`${(analytics.totals.hoverRate * 100).toFixed(2)}%`}
+                  hint={`${formatMs(analytics.totals.totalHoverMs)} total hover time`}
+                />
                 <Stat
                   label="Hover time"
                   value={formatMs(analytics.totals.totalHoverMs)}
@@ -541,6 +546,7 @@ function AdvertiserPortalContent({ onSignedOut }: { onSignedOut: () => void }) {
                 />
                 <Stat label="Clicks" value={String(analytics.totals.clicks)}
                   hint={`${(analytics.totals.ctr * 100).toFixed(2)}% CTR`} />
+                <Stat label="CTR" value={`${(analytics.totals.ctr * 100).toFixed(2)}%`} hint="Click-through rate" />
               </div>
 
               {/* A/B variants */}
