@@ -195,6 +195,8 @@ export interface GeoClusterBreakdown {
   views: number;
   verifiedViews: number;
   intentionalHovers: number;
+  /** Intentional hovers ÷ views for this cluster. Same denominator as CTR. */
+  hoverRate: number;
   totalHoverMs: number;
   clicks: number;
   avgRetentionMs: number;
@@ -207,6 +209,8 @@ export interface CampaignAnalytics {
     verifiedViews: number;
     uniqueUsers: number;
     intentionalHovers: number;
+    /** Intentional hovers ÷ views: the share of impressions that drew a deliberate hover. */
+    hoverRate: number;
     /** Total milliseconds users deliberately hovered over the ad (intent-gated). */
     totalHoverMs: number;
     /** Mean intentional hover per impression, in milliseconds. */

@@ -81,7 +81,9 @@ private beta · P2 = post-launch / polish
       available balance (e.g. $7.00 of $10.00), with the minimum enforced on
       the requested amount as well as the balance.
 - [x] Advertiser hover metrics: total and average intentional hover time in
-      analytics totals and the per-geo breakdown.
+      analytics totals and the per-geo breakdown, plus hover rate
+      (intentional hovers ÷ views, same denominator as CTR) in both the
+      totals and the per-geo rows.
 - [x] Below-threshold campaigns appear in the advertiser portal in a
       collapsible "Under review" section instead of as a hard error; the
       reviewer queue includes auto-rejected campaigns. Development builds keep

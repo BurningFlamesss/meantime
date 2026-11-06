@@ -817,12 +817,15 @@ export async function advertiserRoutes(app: FastifyInstance, ctx: AppContext) {
 
     const geo = geoRows.map((r) => {
       const cluster = r.geoCluster ?? "XX-UNKNOWN";
+      const geoViews = Number(r.views);
+      const geoHovers = Number(r.intentionalHovers);
       return {
         geoCluster: cluster,
         uniqueUsers: Number(r.uniqueUsers),
-        views: Number(r.views),
+        views: geoViews,
         verifiedViews: Number(r.verifiedViews),
-        intentionalHovers: Number(r.intentionalHovers),
+        intentionalHovers: geoHovers,
+        hoverRate: geoViews > 0 ? geoHovers / geoViews : 0,
         totalHoverMs: Number(r.totalHoverMs),
         clicks: clicksByGeo.get(cluster) ?? 0,
         avgRetentionMs: Math.round(Number(r.avgRetentionMs)),
@@ -836,6 +839,7 @@ export async function advertiserRoutes(app: FastifyInstance, ctx: AppContext) {
         verifiedViews: Number(totals?.verifiedViews ?? 0),
         uniqueUsers: Number(totals?.uniqueUsers ?? 0),
         intentionalHovers: Number(totals?.intentionalHovers ?? 0),
+        hoverRate: views > 0 ? Number(totals?.intentionalHovers ?? 0) / views : 0,
         totalHoverMs: Number(totals?.totalHoverMs ?? 0),
         avgHoverMs: Math.round(Number(totals?.avgHoverMs ?? 0)),
         clicks: clicksCount,

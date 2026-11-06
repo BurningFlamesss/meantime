@@ -1,0 +1,840 @@
+#!/usr/bin/env node
+/**
+ * A sharper lightweight / user-impact profile for the extension earning loop.
+ *
+ * Measures CPU (ScriptDuration / TaskDuration / RecalcStyleDuration /
+ * LayoutDuration), memory (JSHeapUsedSize / Nodes / JSEventListeners) and long
+ * tasks, with and without an ad mounted, in a real Chromium with the built
+ * extension loaded.
+ *
+ * Method: a mock ChatGPT page is served locally and mapped onto the
+ * chatgpt.com hostname (--host-resolver-rules), so the real content script
+ * (matched on *://chatgpt.com/*) runs against it. The service worker's
+ * chrome.storage.local is seeded over CDP with a registered user identity and
+ * a synthetic eligible ad; prompts are submitted with in-page Enter keydown
+ * events (the trigger listener is passive/capture and does not require
+ * isTrusted). The same DOM churn schedule (quiet wait -> token stream ->
+ * quiet tail) runs in both windows, so the difference between windows
+ * isolates the ad machinery: the rAF viewability loop, the 50 ms generation
+ * interval, the scoped generation observer, the body-wide reanchor observer,
+ * the 1 s connection watchdog, the theme observer and the hover listeners.
+ *
+ * Prerequisites: `pnpm build` (apps/extension/.output/chrome-mv3 must be
+ * fresh), the API on :3001 (one throwaway user is registered for the
+ * identity), PLAYWRIGHT_CHROME set to the Playwright Chromium binary.
+ *
+ * chatgpt.com is HSTS-preloaded, so Chromium upgrades any plain-HTTP load to
+ * TLS before connecting (ERR_SSL_PROTOCOL_ERROR against an HTTP mock). The
+ * mock therefore serves HTTPS with a throwaway self-signed cert generated
+ * once per machine; --host-resolver-rules still forces every chatgpt.com
+ * connection onto our dynamic unprivileged port, and Chromium ignores the
+ * self-signed cert via --ignore-certificate-errors + Security.setIgnoreCertificateErrors.
+ * The content-script match pattern *://chatgpt.com/* ignores ports, so the
+ * dynamic port does not affect extension injection.
+ */
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
+import { randomUUID } from "node:crypto";
+import { createServer as createTlsServer } from "node:https";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const CHROME = process.env.PLAYWRIGHT_CHROME;
+if (!CHROME) {
+  console.error("Set PLAYWRIGHT_CHROME to the Playwright Chromium binary path.");
+  process.exit(1);
+}
+const API = (process.env.API_BASE ?? "http://127.0.0.1:3001").replace(/\/+$/, "");
+const EXTENSION_DIR = fileURLToPath(new URL("../apps/extension/.output/chrome-mv3", import.meta.url));
+const OUT_DIR = "scripts/artifacts";
+const REPORT = `${OUT_DIR}/perf-profile.json`;
+
+/* Phase plan (mirrored in both windows so B - A isolates the ad machinery). */
+const WAIT_MS = 4_000; // quiet "AI is thinking" phase; generation interval live
+const STREAM_MS = 7_000; // token stream; both observers + interval live
+const TAIL_MS = 4_000; // stream done, ad still held (persist_until_5s)
+const POST_CLOSE_MS = 5_000; // teardown check: loop should be back to baseline
+const MOUNT_TIMEOUT_MS = 10_000;
+const CLOSE_POLL_MS = 6_000;
+
+/* ------------------------------ mock page ------------------------------- */
+
+const MOCK_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mock ChatGPT</title>
+<style>
+  body { font-family: sans-serif; margin: 20px; background: #f0f0f0; }
+  main { border: 1px solid #ddd; padding: 10px; min-height: 200px; background: #fff; }
+  .composer { margin-top: 20px; padding: 10px; border: 1px solid #ccc; border-radius: 8px; }
+  .ProseMirror[contenteditable="true"] { min-height: 40px; border: 1px solid #eee; padding: 5px; }
+  .turn { margin-bottom: 10px; padding: 5px; border-bottom: 1px solid #eee; }
+  .user-message-bubble { background: #e0f7fa; padding: 8px; border-radius: 8px; }
+  .flex-row-reverse { display: flex; justify-content: flex-end; padding-top: 5px; min-height: 44px; }
+  .markdown { padding: 6px; }
+  .filler-node { color: #bbb; font-size: 10px; }
+</style>
+</head>
+<body>
+<main id="thread"></main>
+<div class="composer">
+  <div class="ProseMirror" contenteditable="true" data-testid="prompt-textarea"></div>
+</div>
+<script>
+  const composer = document.querySelector('.ProseMirror[contenteditable="true"]');
+  const thread = document.getElementById("thread");
+  let msgCount = 0;
+
+  // Bulk so the loop's document-wide selector sweeps are non-trivial, like a
+  // real thread. Deliberately matches none of the extension's selectors.
+  for (let i = 0; i < 300; i++) {
+    const f = document.createElement("div");
+    f.className = "filler-node";
+    f.textContent = "filler " + i;
+    thread.append(f);
+  }
+
+  // The mock owns the page-world keydown handler (target phase); the
+  // extension's capture-phase trigger sees the same synthetic event first.
+  composer.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+      e.preventDefault();
+      window.submitPrompt();
+    }
+  });
+
+  window.submitPrompt = () => {
+    msgCount++;
+    const text = composer.textContent || "prompt " + msgCount;
+    const turn = document.createElement("div");
+    turn.className = "turn";
+    const bubble = document.createElement("div");
+    bubble.setAttribute("data-user-message-bubble", "true");
+    bubble.setAttribute("data-message-id", "msg-" + msgCount);
+    bubble.className = "user-message-bubble";
+    bubble.textContent = text;
+    turn.append(bubble);
+    const actionRow = document.createElement("div");
+    actionRow.className = "flex-row-reverse";
+    turn.append(actionRow);
+    const assistant = document.createElement("div");
+    assistant.setAttribute("data-message-author-role", "assistant");
+    const markdown = document.createElement("div");
+    markdown.className = "markdown";
+    assistant.append(markdown);
+    turn.append(assistant);
+    thread.append(turn);
+    turn.scrollIntoView({ block: "nearest" });
+    composer.textContent = "";
+  };
+
+  // Token stream: childList mutations on the thread, the same kind of churn
+  // a real streaming answer produces (and what the reanchor + generation
+  // observers observe).
+  let churnTimer = null;
+  let churnTick = 0;
+  window.startChurn = () => {
+    if (churnTimer) return;
+    churnTimer = setInterval(() => {
+      churnTick++;
+      const marks = document.querySelectorAll(".markdown");
+      const md = marks[marks.length - 1];
+      if (!md) return;
+      const tok = document.createElement("span");
+      tok.textContent = " word" + churnTick;
+      md.append(tok);
+      if (churnTick % 10 === 0 && md.lastElementChild) {
+        md.removeChild(md.lastElementChild); // simulate a markdown re-render
+      }
+    }, 50);
+  };
+  window.stopChurn = () => {
+    clearInterval(churnTimer);
+    churnTimer = null;
+  };
+  // Forced close fallback: remove EVERY turn. The connection watchdog
+  // re-resolves the slot, and a surviving older turn would re-anchor the ad
+  // onto it; only an empty thread makes getThinkingSlot() return null.
+  window.clearTurns = () => {
+    document.querySelectorAll(".turn").forEach((t) => t.remove());
+  };
+  window.adHost = () => document.querySelector('div[data-meantime="ad"]');
+
+  // Long-task collector: frame-level entries include the isolated-world
+  // content script (same renderer main thread).
+  window.__lt = [];
+  window.__n = 0;
+  new PerformanceObserver((list) => {
+    for (const e of list.getEntries()) window.__lt.push({ s: e.startTime, d: e.duration });
+  }).observe({ type: "longtask", buffered: true });
+</script>
+</body>
+</html>`;
+
+/* ------------------------------ CDP client ------------------------------ */
+
+class PageCdp {
+  constructor(ws) {
+    this.ws = ws;
+    this.seq = 0;
+    this.pending = new Map();
+    this.console = [];
+    ws.addEventListener("message", (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.id !== undefined && this.pending.has(msg.id)) {
+        const { resolve, reject } = this.pending.get(msg.id);
+        this.pending.delete(msg.id);
+        msg.error ? reject(new Error(msg.error.message)) : resolve(msg.result);
+      } else if (msg.method === "Runtime.consoleAPICalled") {
+        const text = (msg.params.args ?? []).map((a) => a.value ?? a.description ?? "").join(" ");
+        this.console.push(text);
+      }
+    });
+  }
+  send(method, params = {}) {
+    const id = ++this.seq;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.ws.send(JSON.stringify({ id, method, params }));
+    });
+  }
+}
+
+async function launchBrowser(mockPort) {
+  const proc = spawn(
+    CHROME,
+    [
+      "--headless=new",
+      "--no-sandbox",
+      "--disable-gpu",
+      "--disable-background-timer-throttling",
+      "--disable-backgrounding-occluded-windows",
+      "--disable-renderer-backgrounding",
+      "--window-size=1280,900",
+      `--user-data-dir=/tmp/perf-profile-${Date.now()}`,
+      "--remote-debugging-port=0",
+      `--disable-extensions-except=${EXTENSION_DIR}`,
+      `--load-extension=${EXTENSION_DIR}`,
+      // Single argv entry; no shell, so spaces inside the value are literal.
+      `--host-resolver-rules=MAP chatgpt.com 127.0.0.1:${mockPort}`,
+      // Self-signed mock cert; see ensureMockCert().
+      "--ignore-certificate-errors",
+      `https://chatgpt.com:${mockPort}/`,
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  let browserWs = "";
+  proc.stderr.on("data", (d) => {
+    if (!browserWs) {
+      const m = String(d).match(/ws:\/\/[^\s]+/);
+      if (m) browserWs = m[0];
+    }
+  });
+  const deadline = Date.now() + 15_000;
+  while (!browserWs && Date.now() < deadline) await sleep(100);
+  if (!browserWs) throw new Error("Chromium did not expose a CDP endpoint");
+
+  const cdpPort = new URL(browserWs).port;
+  let pageCdp = null;
+  let swCdp = null;
+  for (let i = 0; i < 150 && !(pageCdp && swCdp); i++) {
+    try {
+      const list = await (await fetch(`http://127.0.0.1:${cdpPort}/json/list`)).json();
+      // Error pages are chrome-error://; the live page is our https mock.
+      const page =
+        list.find((t) => t.type === "page" && t.url.startsWith("https://chatgpt.com")) ??
+        list.find((t) => t.type === "page" && t.url.startsWith("http://chatgpt.com"));
+      if (page && !pageCdp) {
+        const ws = new WebSocket(page.webSocketDebuggerUrl);
+        await new Promise((res, rej) => {
+          ws.addEventListener("open", res, { once: true });
+          ws.addEventListener("error", rej, { once: true });
+        });
+        pageCdp = { cdp: new PageCdp(ws), ws };
+      }
+      const sw = list.find((t) => t.type === "service_worker" && t.url.includes("background.js"));
+      if (sw && !swCdp) {
+        const ws = new WebSocket(sw.webSocketDebuggerUrl);
+        await new Promise((res, rej) => {
+          ws.addEventListener("open", res, { once: true });
+          ws.addEventListener("error", rej, { once: true });
+        });
+        swCdp = { cdp: new PageCdp(ws), ws };
+      }
+    } catch {
+      // target list not ready yet
+    }
+    if (!(pageCdp && swCdp)) await sleep(200);
+  }
+  if (!pageCdp) throw new Error("page target never appeared");
+  if (!swCdp) throw new Error("extension service worker target never appeared");
+  return { proc, pageCdp, swCdp };
+}
+
+const evalJs = (cdp, expression, awaitPromise = false) =>
+  cdp
+    .send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise })
+    .then((r) => {
+      if (r.exceptionDetails) throw new Error(r.exceptionDetails.text ?? "page eval failed");
+      return r.result?.value;
+    });
+
+/**
+ * Throwaway self-signed cert for chatgpt.com (regenerated if missing/expired).
+ * Chromium never trusts it: we pass --ignore-certificate-errors and also flip
+ * Security.setIgnoreCertificateErrors over CDP once the page target is up.
+ */
+function ensureMockCert() {
+  const dir = join(tmpdir(), "meantime-perf-certs");
+  const keyPath = join(dir, "key.pem");
+  const certPath = join(dir, "cert.pem");
+  const certOk =
+    existsSync(keyPath) &&
+    existsSync(certPath) &&
+    Date.now() < statExpiration(certPath);
+  if (!certOk) {
+    mkdirSync(dir, { recursive: true });
+    const r = spawnSync(
+      "openssl",
+      [
+        "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+        "-keyout", keyPath, "-out", certPath,
+        "-days", "7",
+        "-subj", "/CN=chatgpt.com",
+        "-addext", "subjectAltName=DNS:chatgpt.com,DNS:*.chatgpt.com,DNS:chat.openai.com,DNS:localhost,IP:127.0.0.1",
+      ],
+      { stdio: "ignore" },
+    );
+    if (r.status !== 0) throw new Error(`openssl self-sign failed (exit ${r.status})`);
+  }
+  return { key: readFileSync(keyPath), cert: readFileSync(certPath) };
+}
+
+/** Best-effort notAfter parse of a PEM cert; 0 forces regeneration on failure. */
+function statExpiration(certPath) {
+  const r = spawnSync("openssl", ["x509", "-enddate", "-noout", "-in", certPath], {
+    encoding: "utf8",
+  });
+  const m = /notAfter=(.+)/.exec(r.stdout?.trim() ?? "");
+  if (!m || !m[1]) return 0;
+  const t = Date.parse(m[1]);
+  return Number.isFinite(t) ? t - 60_000 : 0; // renew a minute early
+}
+
+/**
+ * Throwaway self-signed cert for chatgpt.com (regenerated if missing/expired).
+ * Chromium never trusts it: we pass --ignore-certificate-errors and also flip
+ * Security.setIgnoreCertificateErrors over CDP once the page target is up.
+ */
+function ensureMockCert() {
+  const dir = join(tmpdir(), "meantime-perf-certs");
+  const keyPath = join(dir, "key.pem");
+  const certPath = join(dir, "cert.pem");
+  const certOk =
+    existsSync(keyPath) &&
+    existsSync(certPath) &&
+    Date.now() < statExpiration(certPath);
+  if (!certOk) {
+    mkdirSync(dir, { recursive: true });
+    const r = spawnSync(
+      "openssl",
+      [
+        "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+        "-keyout", keyPath, "-out", certPath,
+        "-days", "7",
+        "-subj", "/CN=chatgpt.com",
+        "-addext", "subjectAltName=DNS:chatgpt.com,DNS:*.chatgpt.com,DNS:chat.openai.com,DNS:localhost,IP:127.0.0.1",
+      ],
+      { stdio: "ignore" },
+    );
+    if (r.status !== 0) throw new Error(`openssl self-sign failed (exit ${r.status})`);
+  }
+  return { key: readFileSync(keyPath), cert: readFileSync(certPath) };
+}
+
+/** Best-effort notAfter parse of a PEM cert; 0 forces regeneration on failure. */
+function statExpiration(certPath) {
+  const r = spawnSync("openssl", ["x509", "-enddate", "-noout", "-in", certPath], {
+    encoding: "utf8",
+  });
+  const m = /notAfter=(.+)/.exec(r.stdout?.trim() ?? "");
+  if (!m || !m[1]) return 0;
+  const t = Date.parse(m[1]);
+  return Number.isFinite(t) ? t - 60_000 : 0; // renew a minute early
+}
+
+/**
+ * Throwaway self-signed cert for chatgpt.com (regenerated if missing/expired).
+ * Chromium never trusts it: we pass --ignore-certificate-errors and also flip
+ * Security.setIgnoreCertificateErrors over CDP once the page target is up.
+ */
+function ensureMockCert() {
+  const dir = join(tmpdir(), "meantime-perf-certs");
+  const keyPath = join(dir, "key.pem");
+  const certPath = join(dir, "cert.pem");
+  const certOk =
+    existsSync(keyPath) &&
+    existsSync(certPath) &&
+    Date.now() < statExpiration(certPath);
+  if (!certOk) {
+    mkdirSync(dir, { recursive: true });
+    const r = spawnSync(
+      "openssl",
+      [
+        "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+        "-keyout", keyPath, "-out", certPath,
+        "-days", "7",
+        "-subj", "/CN=chatgpt.com",
+        "-addext", "subjectAltName=DNS:chatgpt.com,DNS:*.chatgpt.com,DNS:chat.openai.com,DNS:localhost,IP:127.0.0.1",
+      ],
+      { stdio: "ignore" },
+    );
+    if (r.status !== 0) throw new Error(`openssl self-sign failed (exit ${r.status})`);
+  }
+  return { key: readFileSync(keyPath), cert: readFileSync(certPath) };
+}
+
+/** Best-effort notAfter parse of a PEM cert; 0 forces regeneration on failure. */
+function statExpiration(certPath) {
+  const r = spawnSync("openssl", ["x509", "-enddate", "-noout", "-in", certPath], {
+    encoding: "utf8",
+  });
+  const m = /notAfter=(.+)/.exec(r.stdout ?? "");
+  if (!m || !m[1]) return 0;
+  const t = Date.parse(m[1].trim());
+  return Number.isFinite(t) ? t - 60_000 : 0; // renew a minute early
+}
+
+/* --------------------------- API helpers --------------------------- */
+
+async function api(path, opts = {}) {
+  const res = await fetch(`${API}${path}`, {
+    ...opts,
+    headers: { "content-type": "application/json", ...(opts.headers ?? {}) },
+  });
+  const json = await res.json().catch(() => ({}));
+  return { status: res.status, json };
+}
+
+/** Register a throwaway user; the returned identity seeds the service worker. */
+async function registerUser() {
+  const email = `perf-user-${Date.now()}@example.test`;
+  const reg = await api("/auth/register", {
+    method: "POST",
+    // fingerprintHash is required alongside deviceId for the device row to be
+    // inserted, so the seeded identity matches a real signed-in install.
+    body: JSON.stringify({
+      email,
+      password: "perf-profile-pass-123",
+      deviceId: `perf-device-${randomUUID()}`,
+      fingerprintHash: `perf-fp-${randomUUID().replace(/-/g, "")}`,
+    }),
+  });
+  if (reg.status !== 200) {
+    throw new Error(`user register failed: ${reg.status} ${JSON.stringify(reg.json).slice(0, 200)}`);
+  }
+  return {
+    userId: reg.json.userId,
+    deviceId: reg.json.deviceId,
+    accessToken: reg.json.accessToken,
+    refreshToken: reg.json.refreshToken,
+    tokenExpiresAt: reg.json.refreshExpiresAt,
+    email,
+  };
+}
+
+/* ------------------------- extension seeding ------------------------- */
+
+/** Write chrome.storage.local keys through the real service worker context. */
+async function swSet(swCdp, payload) {
+  return evalJs(
+    swCdp.cdp,
+    `chrome.storage.local.set(${JSON.stringify(payload)})
+      .then(() => chrome.storage.local.get(null))
+      .then((all) => ({
+        identity: !!all.identity,
+        adCache: (all.ad_cache ?? []).length,
+        enabled: all.settings ? all.settings.enabled : null,
+      }))`,
+    true,
+  );
+}
+
+/** A synthetic ad that passes normalizeCachedAds + filterEligible. */
+function syntheticAd() {
+  const now = Date.now();
+  return {
+    adId: randomUUID(),
+    campaignId: randomUUID(),
+    leaseId: randomUUID(),
+    leaseToken: `${randomUUID()}.${randomUUID()}`,
+    issuedAt: Math.floor(now / 1000),
+    expiresAt: Math.floor((now + 3_600_000) / 1000), // seconds
+    cpiMicro: "1000000",
+    durationSec: 15, // widest window: earned close at 15 s of viewable time
+    headline: "Perf harness ad",
+    bodyText: "Synthetic ad used only for local performance profiling.",
+    ctaText: "Learn more",
+    targetUrl: "https://example.com/perf",
+    targetPlatforms: ["openai"],
+    frequencyCap: { maxPerDay: 3, cooldownSec: 1800 },
+  };
+}
+
+/**
+ * Enabled settings for both windows. The windows differ only in what the
+ * service worker can serve: window A is signed out (take_ad refuses fast,
+ * nothing mounts), window B is signed in with a seeded cache.
+ */
+const SETTINGS = {
+  displayMode: "persist_until_5s",
+  placement: "thinking_indicator",
+  theme: "auto",
+  maxAdDurationSec: 15,
+  snoozedUntil: 0,
+  enabled: true,
+};
+
+/* ----------------------------- measuring ------------------------------ */
+
+const PERF_KEYS = [
+  "ScriptDuration", "TaskDuration", "RecalcStyleDuration", "LayoutDuration",
+  "ScriptCount", "RecalcStyleCount", "LayoutCount",
+];
+const MEM_KEYS = ["JSHeapUsedSize", "Nodes", "JSEventListeners", "Documents"];
+
+async function readMetrics(pageCdp) {
+  const [perf, t] = await Promise.all([
+    pageCdp.send("Performance.getMetrics").catch(() => ({ metrics: [] })),
+    evalJs(pageCdp, "performance.now()"),
+  ]);
+  const out = { t };
+  for (const m of perf.metrics ?? []) {
+    if (PERF_KEYS.includes(m.name) || MEM_KEYS.includes(m.name)) out[m.name] = m.value;
+  }
+  return out;
+}
+
+const marks = [];
+let lastLtFloor = 0;
+
+/** Read counters + long tasks since the previous mark. */
+async function mark(pageCdp, name) {
+  const m = await readMetrics(pageCdp);
+  const lts = await evalJs(pageCdp, `window.__lt.filter((e) => e.s >= ${lastLtFloor})`);
+  lastLtFloor = m.t;
+  marks.push({
+    name,
+    t: m.t,
+    metrics: m,
+    longTasks: Array.isArray(lts) ? lts : [],
+  });
+  return m;
+}
+
+/**
+ * Submit a prompt the way a real user does: a synthetic Enter keydown on the
+ * composer. The extension's document-level capture-phase trigger fires first
+ * (it does not require isTrusted), then the mock's target-phase listener
+ * appends the turn — the same ordering a real ChatGPT submit produces.
+ */
+const triggerPrompt = (pageCdp) =>
+  evalJs(
+    pageCdp,
+    `(() => {
+      const composer = document.querySelector('.ProseMirror[contenteditable="true"]');
+      composer.textContent = "profile prompt " + (++window.__n);
+      composer.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, keyCode: 13 })
+      );
+      return "sent";
+    })()`,
+  );
+
+/* ------------------------------- main ---------------------------------- */
+
+const identity = await registerUser();
+console.log(`registered user ${identity.userId} (device ${identity.deviceId})`);
+const ads6 = Array.from({ length: 6 }, () => syntheticAd());
+
+const mockCert = ensureMockCert();
+const server = createTlsServer(mockCert, (req, res) => {
+  if (req.url === "/") {
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(MOCK_HTML);
+  } else {
+    res.writeHead(404);
+    res.end();
+  }
+});
+await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+const mockPort = server.address().port;
+console.log(`mock chat on https://chatgpt.com:${mockPort} (TLS, self-signed, mapped to 127.0.0.1)`);
+
+const { proc, pageCdp, swCdp } = await launchBrowser(mockPort);
+const cdp = pageCdp.cdp;
+let exitCode = 0;
+const summary = { identity: { userId: identity.userId, deviceId: identity.deviceId }, marks: [] };
+
+try {
+  await cdp.send("Page.enable");
+  await cdp.send("Runtime.enable");
+  await cdp.send("Performance.enable").catch(() => undefined);
+  // Belt-and-braces with --ignore-certificate-errors: flip per-target too.
+  await cdp.send("Security.enable").catch(() => undefined);
+  await cdp.send("Security.setIgnoreCertificateErrors", { ignore: true }).catch(() => undefined);
+  await cdp.send("Page.bringToFront").catch(() => undefined);
+  await sleep(1_500); // content script at document_idle + SW onInstalled prefetch
+
+  const state = await evalJs(
+    cdp,
+    `(() => ({
+      href: location.href,
+      readyState: document.readyState,
+      title: document.title,
+      visibility: document.visibilityState,
+      focused: document.hasFocus(),
+      composer: !!document.querySelector('.ProseMirror[contenteditable="true"]'),
+      bodyStart: document.body ? document.body.innerHTML.slice(0, 160) : "",
+      errCode: document.querySelector(".error-code")?.textContent ?? "",
+    }))()`,
+  );
+  console.log(`page state: ${JSON.stringify(state)}`);
+  if (!state?.composer) {
+    throw new Error(
+      `mock page did not load (href=${state?.href}, readyState=${state?.readyState}, title=${state?.title}, bodyStart=${state?.bodyStart})`,
+    );
+  }
+  if (state?.visibility !== "visible") {
+    console.warn("WARNING: page not visible; timers may be throttled and the trigger gate may refuse to mount.");
+  }
+
+  /* ------- Window A: extension signed out — the idle/trigger baseline ------- *
+   * take_ad refuses without identity, so this window measures the page + the
+   * content script's listeners with NO ad machinery: trigger, PoHI, pacing
+   * storage round-trips, waitForMountPoint's scoped observer + 3 s timeout,
+   * releaseUnusedAd — exactly what a signed-out install costs on every prompt.
+   */
+  let seeded = await swSet(swCdp.cdp, { settings: SETTINGS, ad_cache: [] }); // no identity yet
+  console.log(`seeded (signed out, empty cache): ${JSON.stringify(seeded)}`);
+  await sleep(300);
+
+  await mark(cdp, "idle"); // extension at rest, page quiet
+
+  await triggerPrompt(cdp);
+  await sleep(500);
+  await mark(cdp, "A.trigger");
+
+  await sleep(WAIT_MS);
+  await mark(cdp, "A.wait");
+
+  await evalJs(cdp, `window.startChurn(), "churning"`);
+  await sleep(STREAM_MS);
+  await evalJs(cdp, `window.stopChurn(), "stopped"`);
+  await mark(cdp, "A.stream");
+
+  await sleep(TAIL_MS);
+  await mark(cdp, "A.tail");
+
+  /* ------- Arm: identity + 6 synthetic ads (>= LOW_WATER_MARK + 1) ------- *
+   * 6 ads in the cache keeps prefetchIfNeeded(false) from refilling mid-window
+   * (takeAd removes one, 5 >= LOW_WATER_MARK), so the measurement is network-free.
+   */
+  seeded = await swSet(swCdp.cdp, { identity, ad_cache: ads6 });
+  console.log(`seeded (armed: identity + ${ads6.length} ads): ${JSON.stringify(seeded)}`);
+  await sleep(300);
+
+  /* ------- Window B: identical activity with the ad mounted ------- */
+  await mark(cdp, "B.pre");
+  const bTriggerAt = Date.now();
+  await triggerPrompt(cdp);
+
+  let mounted = false;
+  let mountMs = null;
+  for (let i = 0; i < MOUNT_TIMEOUT_MS / 100; i++) {
+    mounted = ((await evalJs(cdp, `!!window.adHost()`)) ?? false) === true;
+    if (mounted) {
+      mountMs = Date.now() - bTriggerAt;
+      break;
+    }
+    await sleep(100);
+  }
+  if (!mounted) {
+    console.error("AD DID NOT MOUNT — extension diagnostics follow below.");
+    const consoleLines = pageCdp.cdp.console.filter((l) => l.includes("MeanTime"));
+    for (const line of consoleLines) console.error(`  [page console] ${line}`);
+    throw new Error("ad never mounted");
+  }
+  const rect = await evalJs(
+    cdp,
+    `(() => { const r = window.adHost().getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: r.height, vh: innerHeight }; })()`,
+  );
+  const inView =
+    rect && rect.height > 0
+      ? Math.max(0, Math.min(rect.bottom, rect.vh) - Math.max(rect.top, 0)) / rect.height
+      : 0;
+  console.log(
+    `ad mounted in ${mountMs} ms; host rect ${rect.height.toFixed(0)}px tall, ${(inView * 100).toFixed(0)}% in viewport (>=75% needed to accrue)`,
+  );
+  await mark(cdp, "B.mount"); // covers trigger + take_ad + widget build
+
+  await sleep(WAIT_MS);
+  await mark(cdp, "B.wait");
+
+  await evalJs(cdp, `window.startChurn(), "churning"`);
+  await sleep(STREAM_MS);
+  await evalJs(cdp, `window.stopChurn(), "stopped"`);
+  await mark(cdp, "B.stream");
+
+  await sleep(TAIL_MS);
+  await mark(cdp, "B.tail");
+
+  /* ------- close: earned at ~15 s cumulative viewable time ------- */
+  let closed = false;
+  let closeMs = null;
+  for (let i = 0; i < CLOSE_POLL_MS / 100; i++) {
+    closed = !((await evalJs(cdp, `!!window.adHost()`)) ?? false);
+    if (closed) {
+      closeMs = Date.now() - bTriggerAt;
+      break;
+    }
+    await sleep(100);
+  }
+  let closePath = "earned";
+  if (!closed) {
+    // Viewability did not accrue in headless (or the timer idled); simulate a
+    // navigation so the connection watchdog settles the impression instead.
+    console.warn("ad did not earn-close; forcing navigated-close by clearing the thread");
+    closePath = "navigated (forced)";
+    await evalJs(cdp, `window.clearTurns(), "cleared"`);
+    for (let i = 0; i < 3_000 / 100 && !closed; i++) {
+      closed = !((await evalJs(cdp, `!!window.adHost()`)) ?? false);
+      if (!closed) await sleep(100);
+    }
+  }
+  if (!closed) throw new Error("ad never unmounted");
+  console.log(`ad closed after ${closeMs} ms (${closePath})`);
+  await mark(cdp, "C.close");
+
+  await sleep(POST_CLOSE_MS);
+  await mark(cdp, "C.post");
+
+  /* ------------------------------ report ------------------------------ */
+  const rows = [];
+  for (let i = 0; i + 1 < marks.length; i++) {
+    const from = marks[i];
+    const to = marks[i + 1];
+    const durMs = to.t - from.t;
+    const d = (k) => (to.metrics[k] ?? 0) - (from.metrics[k] ?? 0);
+    rows.push({
+      phase: `${from.name} -> ${to.name}`,
+      durMs,
+      scriptMs: Math.round(d("ScriptDuration") * 1000),
+      taskMs: Math.round(d("TaskDuration") * 1000),
+      styleMs: Math.round(d("RecalcStyleDuration") * 1000),
+      layoutMs: Math.round(d("LayoutDuration") * 1000),
+      scriptCount: d("ScriptCount"),
+      styleCount: d("RecalcStyleCount"),
+      layoutCount: d("LayoutCount"),
+      longTasks: to.longTasks.length,
+      longTaskMs: Math.round(to.longTasks.reduce((a, e) => a + e.d, 0)),
+      heapDeltaKb: Math.round(((to.metrics.JSHeapUsedSize ?? 0) - (from.metrics.JSHeapUsedSize ?? 0)) / 1024),
+      nodes: d("Nodes"),
+      listeners: d("JSEventListeners"),
+    });
+  }
+
+  const col = (w, v) => String(v).padEnd(w);
+  console.log("\n== Per-phase renderer cost (main thread of the page) ==");
+  console.log(
+    [col(26, "phase"), col(7, "dur"), col(9, "script"), col(9, "task"), col(9, "style"), col(9, "layout"), col(6, "LT"), col(7, "LT ms"), col(10, "heap d"), col(7, "nodes"), col(6, "listen")].join(""),
+  );
+  for (const r of rows) {
+    console.log(
+      [
+        col(26, r.phase),
+        col(7, `${r.durMs}ms`),
+        col(9, `${r.scriptMs}ms`),
+        col(9, `${r.taskMs}ms`),
+        col(9, `${r.styleMs}ms`),
+        col(9, `${r.layoutMs}ms`),
+        col(6, r.longTasks),
+        col(7, r.longTaskMs),
+        col(10, `${r.heapDeltaKb > 0 ? "+" : ""}${r.heapDeltaKb}K`),
+        col(7, r.nodes > 0 ? `+${r.nodes}` : r.nodes),
+        col(6, r.listeners > 0 ? `+${r.listeners}` : r.listeners),
+      ].join(""),
+    );
+  }
+
+  const findRow = (needle) => rows.find((r) => r.phase.startsWith(needle));
+  const marginal = [];
+  // Row "A.wait -> A.stream" covers the stream phase of window A. Comparing the
+  // same phase across windows isolates the ad machinery's marginal cost.
+  const pairs = [
+    ["wait", "A.wait ->", "B.wait ->"],
+    ["stream", "A.stream ->", "B.stream ->"],
+    ["tail", "A.tail ->", "B.tail ->"],
+  ];
+  console.log("\n== Marginal ad cost (B - A over identical page activity) ==");
+  console.log([col(10, "phase"), col(12, "script"), col(12, "task"), col(12, "style"), col(12, "layout"), col(14, "long tasks")].join(""));
+  for (const [label, aKey, bKey] of pairs) {
+    const a = findRow(aKey);
+    const b = findRow(bKey);
+    if (!a || !b) continue;
+    const m = {
+      phase: label,
+      scriptMs: b.scriptMs - a.scriptMs,
+      taskMs: b.taskMs - a.taskMs,
+      styleMs: b.styleMs - a.styleMs,
+      layoutMs: b.layoutMs - a.layoutMs,
+      longTasks: b.longTasks - a.longTasks,
+      longTaskMs: b.longTaskMs - a.longTaskMs,
+    };
+    marginal.push(m);
+    console.log(
+      [col(10, label), col(12, `${m.scriptMs}ms`), col(12, `${m.taskMs}ms`), col(12, `${m.styleMs}ms`), col(12, `${m.layoutMs}ms`), col(14, `${m.longTasks} / ${m.longTaskMs}ms`)].join(""),
+    );
+  }
+
+  const get = (name, key) => marks.find((m) => m.name === name)?.metrics[key];
+  const idleListeners = get("idle", "JSEventListeners");
+  const mountedListeners = get("B.tail", "JSEventListeners");
+  const postListeners = get("C.post", "JSEventListeners");
+  const idleNodes = get("idle", "Nodes");
+  const postNodes = get("C.post", "Nodes");
+  console.log("\n== Leak check ==");
+  console.log(
+    `JSEventListeners: idle ${idleListeners} -> with ad ${mountedListeners} -> after close ${postListeners} ${postListeners <= (idleListeners ?? 0) + 2 ? "(clean teardown)" : "(POSSIBLE LEAK)"}`,
+  );
+  console.log(`Nodes: idle ${idleNodes} -> after close ${postNodes} (page kept its turns; ad nodes must be gone)`);
+
+  const mtLogs = pageCdp.cdp.console.filter((l) => l.includes("MeanTime"));
+  console.log(`\nextension console (${mtLogs.length} [MeanTime] lines):`);
+  for (const line of mtLogs) console.log(`  ${line}`);
+
+  summary.marks = marks;
+  summary.rows = rows;
+  summary.marginal = marginal;
+  summary.mountMs = mountMs;
+  summary.closeMs = closeMs;
+  summary.closePath = closePath;
+  summary.viewability = { rect, inView };
+  summary.leak = { idleListeners, mountedListeners, postListeners, idleNodes, postNodes };
+  mkdirSync(OUT_DIR, { recursive: true });
+  writeFileSync(REPORT, JSON.stringify(summary, null, 2));
+  console.log(`\nreport: ${REPORT}`);
+} catch (err) {
+  console.error(err);
+  exitCode = 1;
+} finally {
+  pageCdp.ws.close();
+  swCdp.ws.close();
+  proc.kill();
+  server.close();
+}
+process.exit(exitCode);

@@ -166,7 +166,8 @@ MeanTime should feel like a quiet utility, not an ad network:
    classifier tuning faster.
 5. An approved campaign becomes active and enters the prefetch pool.
 6. The advertiser sees views, verified views, completion rate, intentional
-   hovers, clicks, CTR, spend, and a per-geo-cluster breakdown.
+   hovers, hover rate (intentional hovers ÷ views), clicks, CTR, spend, and a
+   per-geo-cluster breakdown.
 7. Up to two additional creative variants (B, C) can be submitted; each is
    moderated independently and shares the campaign budget and bid.
 

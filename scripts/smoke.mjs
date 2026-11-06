@@ -449,7 +449,10 @@ async function adminChecks(advertiserToken, referredToken) {
 
   // The referred user earned 55% of a high bid, clearing the $5.00 threshold.
   // A brand-new account cannot reach TRUST.AUTO_APPROVE, so the request lands
-  // in auditing/frozen for an operator decision.
+  // in auditing/frozen for an operator decision. Both paths move the full
+  // $5.00 out of available+pending (an auditing request debits at request
+  // time and also unlocks the pending welcome bonus; a frozen request debits
+  // at approval), so measure the combined balance, not available alone.
   const beforePayout = await call("/me/balance", referredToken);
   const requested = await call("/payouts/request", referredToken, {
     method: "paypal",
@@ -477,9 +480,13 @@ async function adminChecks(advertiserToken, referredToken) {
   );
   const afterPayout = await call("/me/balance", referredToken);
   // Frozen requests debit on approval; auditing requests debit at request
-  // time. Either way the balance measured before the request drops by 5.00.
+  // time (and unlocked the welcome bonus then, which is why the delta is
+  // measured over available+pending). Either way the account's total drops
+  // by exactly 5.00 once the request is approved.
   const payoutDelta =
-    Number(beforePayout.json.availableMicro) - Number(afterPayout.json.availableMicro);
+    Number(beforePayout.json.availableMicro) +
+    Number(beforePayout.json.pendingMicro) -
+    (Number(afterPayout.json.availableMicro) + Number(afterPayout.json.pendingMicro));
   check(
     "reviewer payout approval resolves the request and debits the balance",
     approvedPayout.status === 200 &&
@@ -497,7 +504,7 @@ async function adminChecks(advertiserToken, referredToken) {
 }
 
 /* ------------------------------ referral ------------------------------- */
-async function referralChecks(cpiMicro) {
+async function referralChecks(advertiserToken, campaignId, cpiMicro) {
   const referrer = await registerUser("ref-a");
   if (limited(referrer)) {
     skip("referral checks", "register rate limit (8 per 10 min per IP); re-run later");
@@ -561,13 +568,21 @@ async function referralChecks(cpiMicro) {
 
   /* Earn $1.00+ as the referred user so the bonus vests. */
   const deviceId = `smoke-${randomUUID()}`;
+  // Prefetch the schema maximum so the batch covers every eligible campaign
+  // and the run's own campaign is deterministically among the ads, instead of
+  // relying on bid-weighted sampling to pick it.
   const prefetched = await alt("/ads/prefetch", referred.json.accessToken, {
     deviceId,
-    count: 5,
+    count: 25,
     platforms: ["openai"],
   });
   const ad =
-    prefetched.json?.ads?.find((a) => Number(a.cpiMicro) === cpiMicro) ?? prefetched.json?.ads?.[0];
+    // Prefer this run's campaign so the analytics check below can run against
+    // a campaign the run's advertiser owns; bid-weighted sampling across all
+    // active campaigns can otherwise serve an older run's campaign.
+    prefetched.json?.ads?.find((a) => a.campaignId === campaignId) ??
+    prefetched.json?.ads?.find((a) => Number(a.cpiMicro) === cpiMicro) ??
+    prefetched.json?.ads?.[0];
   check(
     "referred user receives a leased ad",
     prefetched.status === 200 && !!ad?.leaseToken,
@@ -624,6 +639,37 @@ async function referralChecks(cpiMicro) {
     Number(balance.json.availableMicro) >= 500_000,
     `available ${balance.json.availableMicro}`,
   );
+
+  // The verified view above carried an intentional hover, so the campaign's
+  // analytics must report the hover rate as intentional hovers / views in
+  // both the totals and the per-geo rows. The database persists across runs,
+  // so assert the ratio, not absolute counts. Only this run's advertiser can
+  // read the analytics, so the check only runs when the impression landed on
+  // the campaign created by this run.
+  if (ad.campaignId !== campaignId) {
+    skip(
+      "campaign analytics report the hover rate",
+      "the served ad belongs to another advertiser's campaign",
+    );
+  } else {
+    const analytics = await call(
+      `/advertiser/campaigns/${ad.campaignId}/analytics`,
+      advertiserToken,
+    );
+    const totals = analytics.json?.totals;
+    const expectedRate = totals?.views > 0 ? totals.intentionalHovers / totals.views : 0;
+    check(
+      "campaign analytics report the hover rate",
+      analytics.status === 200 &&
+        totals?.views >= 1 &&
+        totals?.intentionalHovers >= 1 &&
+        Math.abs((totals?.hoverRate ?? -1) - expectedRate) < 1e-9 &&
+        analytics.json?.geo?.every(
+          (g) => Math.abs(g.hoverRate - (g.views > 0 ? g.intentionalHovers / g.views : 0)) < 1e-9,
+        ),
+      `status ${analytics.status}, views ${totals?.views}, hovers ${totals?.intentionalHovers}, hoverRate ${totals?.hoverRate}`,
+    );
+  }
   return referred.json.accessToken;
 }
 
@@ -646,7 +692,7 @@ async function main() {
   const campaign = await campaignChecks(advertiserToken, cpiMicro);
   let referredToken = null;
   if (campaign?.status === "active" && isLoopback) {
-    referredToken = await referralChecks(cpiMicro);
+    referredToken = await referralChecks(advertiserToken, campaign.id, cpiMicro);
   } else if (campaign?.status !== "active") {
     check("referral vesting", false, "skipped: no active campaign to serve");
   }

@@ -532,7 +532,8 @@ function AdvertiserPortalContent({ onSignedOut }: { onSignedOut: () => void }) {
                 <Stat label="Views" value={String(analytics.totals.views)} />
                 <Stat label="Verified 5s views" value={String(analytics.totals.verifiedViews)}
                   hint={`${(analytics.totals.completionRate * 100).toFixed(0)}% completion`} />
-                <Stat label="Intentional hovers" value={String(analytics.totals.intentionalHovers)} />
+                <Stat label="Intentional hovers" value={String(analytics.totals.intentionalHovers)}
+                  hint={`${(analytics.totals.hoverRate * 100).toFixed(2)}% of views`} />
                 <Stat
                   label="Hover time"
                   value={formatMs(analytics.totals.totalHoverMs)}
@@ -606,7 +607,7 @@ function AdvertiserPortalContent({ onSignedOut }: { onSignedOut: () => void }) {
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">
                   By geography
                 </h3>
-                <Table head={["Cluster", "Unique users", "Views", "Verified", "Hovers", "Hover time", "Clicks", "Avg retention"]}>
+                <Table head={["Cluster", "Unique users", "Views", "Verified", "Hovers", "Hover rate", "Hover time", "Clicks", "Avg retention"]}>
                   {analytics.geo.map((g) => (
                     <tr key={g.geoCluster}>
                       <td className="px-4 py-3 font-medium text-neutral-900">{g.geoCluster}</td>
@@ -614,13 +615,14 @@ function AdvertiserPortalContent({ onSignedOut }: { onSignedOut: () => void }) {
                       <td className="tabular px-4 py-3">{g.views}</td>
                       <td className="tabular px-4 py-3">{g.verifiedViews}</td>
                       <td className="tabular px-4 py-3">{g.intentionalHovers}</td>
+                      <td className="tabular px-4 py-3">{(g.hoverRate * 100).toFixed(1)}%</td>
                       <td className="tabular px-4 py-3">{formatMs(g.totalHoverMs)}</td>
                       <td className="tabular px-4 py-3">{g.clicks}</td>
                       <td className="tabular px-4 py-3">{formatMs(g.avgRetentionMs)}</td>
                     </tr>
                   ))}
                   {analytics.geo.length === 0 && (
-                    <tr><td colSpan={8}><Empty title="No geo data yet" /></td></tr>
+                    <tr><td colSpan={9}><Empty title="No geo data yet" /></td></tr>
                   )}
                 </Table>
               </div>
